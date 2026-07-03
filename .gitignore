@@ -1,0 +1,37 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Swift / SPM
+.build/
+.swiftpm/
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+
+# HarmonyOS / DevEco Studio
+.idea/
+*.iml
+.hvigor/
+build/
+oh_modules/
+.cxx/
+.gradle/
+local.properties
+entry/src/main/resources/rawfile/
+signing/
+
+# 暂不启用的功能备份（不在源码树中，避免编译报错）
+sms_backup/
+
+# Relay server config (contains personal server IP, do not commit)
+relay_config.json
+entry/src/main/resources/rawfile/relay_config.json
+
+# Logs
+*.log
+
+# IDE
+.vscode/

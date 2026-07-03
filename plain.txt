@@ -1,0 +1,36 @@
+ClipboardSync/
+├── mac/                                    # Mac 端 (Swift + SwiftUI)
+│   ├── Package.swift                       # SPM 构建配置
+│   └── ClipboardSync/
+│       ├── ClipboardSyncApp.swift          # 入口，菜单栏应用
+│       ├── AppDelegate.swift              # 菜单栏 popover 管理
+│       ├── MainView.swift                 # 主 UI（状态+历史列表）
+│       ├── Protocol.swift                 # 通信协议常量与消息结构
+│       ├── DiscoveryService.swift         # UDP 广播设备发现
+│       ├── TCPServer.swift                # TCP 服务端（换行分隔JSON）
+│       ├── ClipboardMonitor.swift         # NSPasteboard 轮询监听
+│       ├── SyncManager.swift              # 总协调器
+│       └── Info.plist                     # LSUIElement=true, 无Dock图标
+│
+├── harmony/                                # 鸿蒙端 (ArkTS + ArkUI)
+│   ├── AppScope/app.json5
+│   ├── build-profile.json5
+│   ├── oh-package.json5
+│   └── entry/
+│       ├── oh-package.json5
+│       ├── src/main/
+│       │   ├── module.json5               # 模块配置+权限声明
+│       │   ├── ets/
+│       │   │   ├── common/
+│       │   │   │   ├── Protocol.ets       # 通信协议（与Mac端共享）
+│       │   │   │   ├── DiscoveryService.ets # UDP 广播发现
+│       │   │   │   └── TCPClient.ets      # TCP 客户端
+│       │   │   ├── model/
+│       │   │   │   └── SyncManager.ets    # 总协调器
+│       │   │   ├── entryability/
+│       │   │   │   └── EntryAbility.ets
+│       │   │   └── pages/
+│       │   │       └── Index.ets          # 主 UI
+│       │   └── resources/base/
+│       │       ├── element/{string,color}.json
+│       │       └── profile/main_pages.json

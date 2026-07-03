@@ -1,0 +1,9 @@
+{
+  "string": [
+    { "name": "module_name", "value": "entry" },
+    { "name": "entry_desc", "value": "剪贴板同步应用" },
+    { "name": "MainAbility_desc", "value": "剪贴板同步主界面" },
+    { "name": "MainAbility_label", "value": "剪贴板同步" },
+    { "name": "camera_permission_reason", "value": "用于扫描 Mac 端配对二维码" }
+  ]
+}

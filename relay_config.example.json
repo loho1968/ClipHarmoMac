@@ -1,0 +1,7 @@
+{
+  "relay": {
+    "defaultHost": "your-server-ip-or-domain",
+    "defaultPort": 8443,
+    "wsPath": "/ws"
+  }
+}

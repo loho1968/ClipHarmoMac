@@ -1,0 +1,43 @@
+{
+  "app": {
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "storeFile": "./signing/ClipboardSync.p12",
+          "storePassword": "0000001BA2B37537280730245DAB898845A6D6D98542219A87ABFA8D60FA1F6EBB976FFE94E71F3F2642C0",
+          "keyAlias": "ClipboardSync",
+          "keyPassword": "0000001BE4076E11B5AF593414AAB7794653E7505AE9FC2631DF7D4B27125948A3EA0543A44399A1A723B7",
+          "signAlg": "SHA256withECDSA",
+          "profile": "./signing/ClipboardSyncDebug.p7b",
+          "certpath": "./signing/ClipboardSync.cer"
+        }
+      }
+    ],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compatibleSdkVersion": "6.0.1(21)",
+        "runtimeOS": "HarmonyOS",
+        "compileSdkVersion": "26.0.0",
+        "targetSdkVersion": "6.1.0(23)"
+      }
+    ]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        }
+      ]
+    }
+  ]
+}
