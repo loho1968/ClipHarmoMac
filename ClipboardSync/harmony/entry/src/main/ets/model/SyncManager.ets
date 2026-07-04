@@ -9,9 +9,10 @@ import { wifiManager } from '@kit.ConnectivityKit'
 import { preferences } from '@kit.ArkData'
 import { util } from '@kit.ArkTS'
 import { image } from '@kit.ImageKit'
-import { fileIo } from '@kit.CoreFileKit'
+import { fileIo, picker } from '@kit.CoreFileKit'
 import { SaveDirectoryManager } from '../model/SaveDirectoryManager'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
+import { Want } from '@kit.AbilityKit'
 
 // 同步记录
 export interface SyncRecord {
@@ -37,6 +38,18 @@ interface ChunkBuffer {
   chunks: Map<number, string>
   metadata: SyncMessage
   timestamp: number
+}
+
+// 待保存文件
+export interface PendingFile {
+  id: string
+  base64: string
+  fileName: string
+  fileSize: number
+  mimeType: string
+  format: string
+  isImage: boolean
+  receivedAt: number
 }
 
 // 同步状态
@@ -82,6 +95,10 @@ export class SyncManager {
 
   // 弹出"记住此网络"提示
   onAskRememberNetwork?: (ssid: string, macIP: string, macDeviceId: string) => void
+
+  // 待保存文件队列
+  private pendingFiles: PendingFile[] = []
+  onPendingFileReceived?: (file: PendingFile) => void
 
   // 状态
   private _status: SyncStatus = SyncStatus.DISCONNECTED
@@ -798,7 +815,6 @@ export class SyncManager {
    */
   onAppForeground(): void {
     console.info('[SyncManager] onAppForeground: dirty=' + this._clipboardDirty + ' cachedLen=' + this._cachedClipboardText.length)
-    // 从后台切回前台，立即用 checkClipboard 的方式触发一次读取
     try {
       const changeCount = this.systemPasteboard.getChangeCount()
       if (changeCount !== this.lastChangeCount) {
@@ -807,6 +823,13 @@ export class SyncManager {
       }
     } catch (_e) { /* silent */ }
     this.onClipboardChanged()
+
+    if (this.pendingFiles.length > 0) {
+      console.info('[SyncManager] onAppForeground: flushing ' + this.pendingFiles.length + ' pending files')
+      for (let i = 0; i < this.pendingFiles.length; i++) {
+        this.onPendingFileReceived?.(this.pendingFiles[i])
+      }
+    }
   }
 
   /**
@@ -964,7 +987,7 @@ export class SyncManager {
     try {
       const photoSelectOptions = new photoAccessHelper.PhotoSelectOptions()
       photoSelectOptions.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE
-      photoSelectOptions.maxSelectNumber = 1
+      photoSelectOptions.maxSelectNumber = 10
       const photoPicker = new photoAccessHelper.PhotoViewPicker()
       const result: photoAccessHelper.PhotoSelectResult = await photoPicker.select(photoSelectOptions)
       const uris: string[] = result.photoUris
@@ -1024,6 +1047,169 @@ export class SyncManager {
       }
     } catch (err) {
       console.error('[SyncManager] selectAndSendImage error: ' + JSON.stringify(err))
+    }
+  }
+
+  // ============ 手动选择文件发送 ============
+
+  async selectAndSendFile(): Promise<void> {
+    console.info('[SyncManager] selectAndSendFile: opening picker...')
+    try {
+      const options = new picker.DocumentSelectOptions()
+      options.maxSelectNumber = 1
+      const documentPicker = new picker.DocumentViewPicker()
+      const result: string[] = await documentPicker.select(options)
+      if (!result || result.length === 0) {
+        return
+      }
+      const uri: string = result[0]
+      console.info('[SyncManager] selectAndSendFile: selected ' + uri)
+
+      const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
+      const stat = fileIo.statSync(uri)
+      const buffer = new ArrayBuffer(stat.size)
+      fileIo.readSync(file.fd, buffer)
+      fileIo.closeSync(file)
+
+      const fileName: string = uri.substring(uri.lastIndexOf('/') + 1) || 'unknown_file'
+      const fileSize: number = stat.size
+      console.info('[SyncManager] selectAndSendFile: ' + fileName + ' size=' + fileSize)
+
+      this.sendFile(buffer, fileName, fileSize)
+      this.addRecord('[文件] ' + fileName, 'sent')
+    } catch (err) {
+      console.error('[SyncManager] selectAndSendFile error: ' + JSON.stringify(err))
+    }
+  }
+
+  private sendFile(data: ArrayBuffer, fileName: string, fileSize: number): void {
+    const timestamp = Date.now() / 1000
+    this.lastSentTimestamp = timestamp
+    const base64Helper = new util.Base64Helper()
+    const base64: string = base64Helper.encodeToStringSync(new Uint8Array(data))
+
+    const msg: SyncMessage = {
+      type: MessageType.CLIPBOARD_FILE,
+      content: base64,
+      timestamp: timestamp,
+      deviceId: ProtocolConst.DEVICE_ID,
+      mimeType: 'application/octet-stream',
+      fileName: fileName,
+      fileSize: fileSize
+    }
+
+    if (fileSize <= 500 * 1024) {
+      console.info('[SyncManager] sendFile: single msg, size=' + fileSize)
+      this.sendMsg(msg)
+    } else {
+      console.info('[SyncManager] sendFile: chunked, size=' + fileSize)
+      this.sendInChunks(msg, new Uint8Array(data))
+    }
+  }
+
+  // ============ 接收其他 App 分享内容 ============
+
+  async handleSharedContent(want: Want): Promise<void> {
+    console.info('[SyncManager] handleSharedContent: action=' + want.action)
+
+    const uris: string[] = []
+    if (want.uri && want.uri.length > 0) {
+      uris.push(want.uri)
+      console.info('[SyncManager] handleSharedContent: want.uri=' + want.uri)
+    }
+
+    const params = want.parameters as Record<string, Object> | undefined
+    if (params) {
+      const stream = params['ability.params.stream'] as string[] | undefined
+      if (stream) {
+        for (let i = 0; i < stream.length; i++) {
+          uris.push(stream[i])
+        }
+        console.info('[SyncManager] handleSharedContent: stream count=' + stream.length)
+      }
+    }
+
+    if (uris.length === 0) {
+      console.info('[SyncManager] handleSharedContent: no URIs found')
+      return
+    }
+
+    if (this._status === SyncStatus.DISCONNECTED) {
+      console.info('[SyncManager] handleSharedContent: starting sync manager...')
+      this.start()
+      let waited: number = 0
+      while (this._status === SyncStatus.DISCOVERING && waited < 10000) {
+        await new Promise<void>((r: Function) => setTimeout(r, 500))
+        waited += 500
+      }
+      if (this._status !== SyncStatus.CONNECTED) {
+        console.warn('[SyncManager] handleSharedContent: connection timeout, aborting')
+        return
+      }
+    }
+
+    for (let i = 0; i < uris.length; i++) {
+      await this.processSharedUri(uris[i])
+    }
+  }
+
+  private async processSharedUri(uri: string): Promise<void> {
+    console.info('[SyncManager] processSharedUri: ' + uri)
+    try {
+      const file = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY)
+      const stat = fileIo.statSync(uri)
+      const buffer = new ArrayBuffer(stat.size)
+      fileIo.readSync(file.fd, buffer)
+      fileIo.closeSync(file)
+
+      const fileName: string = uri.substring(uri.lastIndexOf('/') + 1) || 'shared_file'
+      const fileSize: number = stat.size
+
+      const isImage: boolean = fileName.endsWith('.jpg') || fileName.endsWith('.jpeg') ||
+        fileName.endsWith('.png') || fileName.endsWith('.gif') ||
+        fileName.endsWith('.webp') || fileName.endsWith('.bmp') ||
+        fileName.endsWith('.heic') || fileName.endsWith('.heif')
+
+      if (isImage) {
+        const imageSource: image.ImageSource = image.createImageSource(buffer)
+        const pixelMap: image.PixelMap = await imageSource.createPixelMap()
+        const imageInfo: image.ImageInfo = await pixelMap.getImageInfo()
+        let width: number = imageInfo.size.width
+        let height: number = imageInfo.size.height
+        imageSource.release()
+
+        const maxLongSide: number = 1920
+        if (Math.max(width, height) > maxLongSide) {
+          const scaleRatio: number = maxLongSide / Math.max(width, height)
+          const newWidth: number = Math.round(width * scaleRatio)
+          const newHeight: number = Math.round(height * scaleRatio)
+          try {
+            await pixelMap.scale(newWidth / width, newHeight / height)
+            width = newWidth
+            height = newHeight
+          } catch (_e) { /* ignore */ }
+        }
+
+        const imagePacker: image.ImagePacker = image.createImagePacker()
+        const packOpts: image.PackingOption = { format: 'image/jpeg', quality: 80 }
+        let jpegBuf: ArrayBuffer = await imagePacker.packToData(pixelMap, packOpts)
+        imagePacker.release()
+
+        const base64Helper = new util.Base64Helper()
+        const base64: string = base64Helper.encodeToStringSync(new Uint8Array(jpegBuf))
+        const payload: ImagePayload = {
+          base64: base64, width: width, height: height, size: jpegBuf.byteLength, format: 'jpeg'
+        }
+        this.sendClipboardImage(payload)
+        this.addRecord('[图片] ' + width + 'x' + height + ' (分享)', 'sent')
+        console.info('[SyncManager] processSharedUri: image sent, size=' + jpegBuf.byteLength)
+      } else {
+        this.sendFile(buffer, fileName, fileSize)
+        this.addRecord('[文件] ' + fileName + ' (分享)', 'sent')
+        console.info('[SyncManager] processSharedUri: file sent, size=' + fileSize)
+      }
+    } catch (e) {
+      console.error('[SyncManager] processSharedUri error: ' + JSON.stringify(e))
     }
   }
 
@@ -1163,40 +1349,100 @@ export class SyncManager {
     this.isRemoteUpdate = false
 
     this.addRecord('[图片]', 'received')
+
+    const fileName: string = msg.fileName ?? 'clipboard_' +
+      new Date().toISOString().replace(/[:.]/g, '') + '.jpeg'
+    const pending: PendingFile = {
+      id: util.generateRandomUUID(),
+      base64: msg.content,
+      fileName: fileName,
+      fileSize: msg.fileSize ?? buffer.byteLength,
+      mimeType: msg.mimeType ?? 'image/jpeg',
+      format: msg.format ?? 'jpeg',
+      isImage: true,
+      receivedAt: Date.now()
+    }
+    this.pendingFiles.push(pending)
+    this.onPendingFileReceived?.(pending)
   }
 
   // ============ 文件写入 ============
 
   private async writeClipboardFile(msg: SyncMessage): Promise<void> {
     this.isRemoteUpdate = true
-    const base64Helper = new util.Base64Helper()
-    const buffer: Uint8Array = base64Helper.decodeSync(msg.content)
     const fileName: string = msg.fileName ?? 'received_file'
 
-    const ctx = this._context
-    if (!ctx) {
-      console.error('[SyncManager] writeClipboardFile: no context')
-      this.isRemoteUpdate = false
-      return
-    }
-    const saveDir: string = SaveDirectoryManager.getInstance().getCurrentDirectory()
-    let filePath: string = saveDir + '/' + fileName
-    try {
-      const file = fileIo.openSync(filePath, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY)
-      fileIo.writeSync(file.fd, buffer.buffer as ArrayBuffer)
-      fileIo.closeSync(file)
-      console.info('[SyncManager] writeClipboardFile: saved to ' + filePath)
-    } catch (_e) {
-      console.error('[SyncManager] writeClipboardFile: write failed')
-      this.isRemoteUpdate = false
-      return
-    }
-
-    this.lastChangeCount = this.systemPasteboard.getChangeCount()
-    this._clipboardDirty = false
     this.isRemoteUpdate = false
 
     this.addRecord('[文件] ' + fileName, 'received')
+
+    const pending: PendingFile = {
+      id: util.generateRandomUUID(),
+      base64: msg.content,
+      fileName: fileName,
+      fileSize: msg.fileSize ?? 0,
+      mimeType: msg.mimeType ?? 'application/octet-stream',
+      format: msg.format ?? '',
+      isImage: false,
+      receivedAt: Date.now()
+    }
+    this.pendingFiles.push(pending)
+    this.onPendingFileReceived?.(pending)
+  }
+
+  /**
+   * 将待保存文件写入指定目录
+   * @param id 待保存文件 ID
+   * @param directoryPath 目标目录路径
+   * @returns 保存后的完整文件路径，失败返回空字符串
+   */
+  async savePendingFile(id: string, directoryPath: string): Promise<string> {
+    const index = this.pendingFiles.findIndex((f: PendingFile) => f.id === id)
+    if (index === -1) {
+      console.error('[SyncManager] savePendingFile: not found ' + id)
+      return ''
+    }
+    const pending: PendingFile = this.pendingFiles[index]
+    this.pendingFiles.splice(index, 1)
+
+    const base64Helper = new util.Base64Helper()
+    const buffer: Uint8Array = base64Helper.decodeSync(pending.base64)
+
+    let filePath: string = directoryPath + '/' + pending.fileName
+    let counter: number = 1
+    const ext: string = pending.fileName.includes('.') ?
+      pending.fileName.substring(pending.fileName.lastIndexOf('.')) : ''
+    const baseName: string = pending.fileName.includes('.') ?
+      pending.fileName.substring(0, pending.fileName.lastIndexOf('.')) : pending.fileName
+
+    try {
+      while (fileIo.accessSync(filePath)) {
+        filePath = directoryPath + '/' + baseName + ' (' + counter + ')' + ext
+        counter++
+      }
+      const file = fileIo.openSync(filePath,
+        fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY)
+      fileIo.writeSync(file.fd, buffer.buffer as ArrayBuffer)
+      fileIo.closeSync(file)
+      console.info('[SyncManager] savePendingFile: saved to ' + filePath)
+    } catch (_e) {
+      console.error('[SyncManager] savePendingFile: write failed for ' + filePath)
+      return ''
+    }
+
+    if (!pending.isImage) {
+      try {
+        this.isRemoteUpdate = true
+        const pasteData: pasteboard.PasteData =
+          pasteboard.createData(pasteboard.MIMETYPE_TEXT_URI, filePath)
+        this.systemPasteboard.setDataSync(pasteData)
+        this.isRemoteUpdate = false
+      } catch (_e) {
+        console.error('[SyncManager] savePendingFile: clipboard write failed')
+      }
+    }
+
+    return filePath
   }
 
   // ============ 分片发送 ============

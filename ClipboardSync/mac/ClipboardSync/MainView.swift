@@ -14,6 +14,12 @@ struct MainView: View {
 
             Divider()
 
+            // 暂存待发卡片（图片/文件复制后不自动发送，需用户手动触发）
+            if syncManager.pendingImageData != nil || syncManager.pendingFileURL != nil {
+                pendingContentCard
+                Divider()
+            }
+
             // 云中继配对卡片
             relayCard
 
@@ -267,6 +273,102 @@ struct MainView: View {
         )
         .padding(.horizontal, 12)
         .padding(.top, 12)
+    }
+
+    // MARK: - 暂存待发卡片
+
+    private var pendingContentCard: some View {
+        VStack(spacing: 6) {
+            // 标题行
+            HStack(spacing: 6) {
+                Image(systemName: "paperplane")
+                    .font(.system(size: 10))
+                    .foregroundColor(.orange)
+                Text("待发送")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                Button(action: {
+                    syncManager.clearPendingContent()
+                }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+            }
+
+            // 内容描述
+            if let meta = syncManager.pendingImageMetadata {
+                HStack(spacing: 4) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 9))
+                        .foregroundColor(.blue)
+                    Text("图片 \(meta.width)×\(meta.height) — \(meta.fileSize / 1024)KB")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            } else if let fileURL = syncManager.pendingFileURL {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc")
+                        .font(.system(size: 9))
+                        .foregroundColor(.blue)
+                    Text(fileURL.lastPathComponent)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            // 发送进度
+            if !syncManager.sendProgress.isEmpty {
+                Text(syncManager.sendProgress)
+                    .font(.system(size: 10))
+                    .foregroundColor(syncManager.sendProgress.hasSuffix("✓") ? .green : .orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            // 操作按钮
+            if !syncManager.isSendingContent {
+                HStack(spacing: 6) {
+                    Spacer()
+                    Button(action: {
+                        syncManager.clearPendingContent()
+                    }) {
+                        Text("忽略")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.secondary)
+
+                    Button(action: {
+                        syncManager.sendPendingContent()
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 9))
+                            Text("发送到手机")
+                                .font(.system(size: 10))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.orange)
+                    )
+                }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
     }
 
     // MARK: - 云中继卡片

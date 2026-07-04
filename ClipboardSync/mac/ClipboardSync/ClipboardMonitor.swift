@@ -15,8 +15,11 @@ class ClipboardMonitor {
     private var lastChangeCount: Int
     private let pasteboard = NSPasteboard.general
 
-    /// 剪贴板变化回调：(文本, 图片数据, 图片元数据)
-    var onClipboardChanged: ((String?, Data?, ClipboardImageMetadata?) -> Void)?
+    /// 剪贴板变化回调：(文本, 图片数据, 图片元数据, 文件路径)
+    /// 文本复制 → 仅 text 有值，自动发送
+    /// 图片复制 → imageData + metadata 有值，暂存待用户手动发送
+    /// 文件复制 → fileURL 有值，暂存待用户手动发送
+    var onClipboardChanged: ((String?, Data?, ClipboardImageMetadata?, URL?) -> Void)?
     var isRemoteUpdate: Bool = false
 
     /// 图片压缩参数
@@ -139,18 +142,26 @@ class ClipboardMonitor {
 
         lastChangeCount = pasteboard.changeCount
 
-        // 优先读取文本
+        // 优先读取文本（自动发送，无需用户手动触发）
         if let text = pasteboard.string(forType: .string) {
-            onClipboardChanged?(text, nil, nil)
+            onClipboardChanged?(text, nil, nil, nil)
             return
         }
 
-        // 尝试读取图片（压缩后回调）
+        // 尝试读取图片（压缩后回调，暂存待用户手动发送）
         if let tiffData = pasteboard.data(forType: .tiff),
            NSImage(data: tiffData) != nil {
             if let (compressedData, metadata) = Self.compressImage(tiffData: tiffData) {
-                onClipboardChanged?(nil, compressedData, metadata)
+                onClipboardChanged?(nil, compressedData, metadata, nil)
+                return
             }
+        }
+
+        // 尝试读取文件 URL（Finder 中复制文件时，暂存待用户手动发送）
+        if let fileURLs = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let fileURL = fileURLs.first {
+            print("[ClipboardMonitor] File detected: \(fileURL.path)")
+            onClipboardChanged?(nil, nil, nil, fileURL)
         }
     }
 }

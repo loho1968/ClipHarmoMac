@@ -19,11 +19,20 @@
         "startWindowIcon": "$media:travel",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
-        "backgroundModes": ["dataTransfer"],
+        "backgroundModes": ["multiDeviceConnection"],
         "skills": [
           {
             "actions": ["action.system.home"],
             "entities": ["entity.system.home"]
+          },
+          {
+            "actions": ["ohos.want.action.sendData"],
+            "entities": ["entity.system.default"],
+            "uris": [
+              { "scheme": "file", "type": "image/*" },
+              { "scheme": "file", "type": "*/*" },
+              { "scheme": "content", "type": "*/*" }
+            ]
           }
         ]
       }

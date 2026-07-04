@@ -168,8 +168,8 @@ class SyncManager: ObservableObject {
         }
 
         // 本地剪贴板变化
-        clipboard.onClipboardChanged = { [weak self] text, imageData, metadata in
-            self?.handleLocalClipboardChange(text: text, imageData: imageData, metadata: metadata)
+        clipboard.onClipboardChanged = { [weak self] text, imageData, metadata, fileURL in
+            self?.handleLocalClipboardChange(text: text, imageData: imageData, metadata: metadata, fileURL: fileURL)
         }
     }
 
@@ -403,17 +403,18 @@ class SyncManager: ObservableObject {
         }
     }
 
-    private func handleLocalClipboardChange(text: String?, imageData: Data?, metadata: ClipboardImageMetadata?) {
+    private func handleLocalClipboardChange(text: String?, imageData: Data?, metadata: ClipboardImageMetadata?, fileURL: URL?) {
         // 级联防护：远端写入剪贴板触发的本地变化不应回传
         guard !isProcessingRemote else {
             print("[SyncManager] local change suppressed (remote in progress)")
             return
         }
-        print("[SyncManager] → local clipboard change, sending...")
-        let timestamp = Date().timeIntervalSince1970
-        lastSentTimestamp = timestamp
 
         if let text = text {
+            // 文字 → 自动发送（保持现有行为）
+            print("[SyncManager] → text copied, auto-sending...")
+            let timestamp = Date().timeIntervalSince1970
+            lastSentTimestamp = timestamp
             let currentSSID = CWWiFiClient.shared().interface()?.ssid()
             let msg = SyncMessage(
                 type: .clipboardText,
@@ -425,24 +426,129 @@ class SyncManager: ObservableObject {
             )
             sendOrBroadcast(msg)
             addRecord(text, direction: .sent)
+            // 清除旧的图片/文件暂存
+            clearPendingContent()
         } else if let imageData = imageData, let meta = metadata {
-            let currentSSID = CWWiFiClient.shared().interface()?.ssid()
-            let msg = SyncMessage(
-                type: .clipboardImage,
-                content: "",  // 分片发送时会覆盖
-                timestamp: timestamp,
-                deviceId: ProtocolConst.deviceId,
-                mimeType: "image/jpeg",
-                networkSSID: currentSSID,
-                fileName: meta.fileName,
-                fileSize: meta.fileSize,
-                imageWidth: meta.width,
-                imageHeight: meta.height,
-                format: meta.format
-            )
-            sendWithChunking(basePayload: msg, rawData: imageData)
-            addRecord("[图片]", direction: .sent)
+            // 图片 → 暂存，等待用户手动发送
+            print("[SyncManager] → image copied, pending send: \(meta.fileSize / 1024)KB")
+            pendingImageData = imageData
+            pendingImageMetadata = meta
+            pendingFileURL = nil
+            sendProgress = "准备发送图片 (\(meta.fileSize / 1024)KB, \(meta.width)×\(meta.height))"
+        } else if let fileURL = fileURL {
+            // 文件 → 暂存，等待用户手动发送
+            print("[SyncManager] → file copied, pending send: \(fileURL.lastPathComponent)")
+            pendingFileURL = fileURL
+            pendingImageData = nil
+            pendingImageMetadata = nil
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0
+            sendProgress = "准备发送文件: \(fileURL.lastPathComponent) (\(fileSize / 1024)KB)"
         }
+    }
+
+    /// 清除暂存的内容
+    func clearPendingContent() {
+        pendingImageData = nil
+        pendingImageMetadata = nil
+        pendingFileURL = nil
+        sendProgress = ""
+        isSendingContent = false
+    }
+
+    /// 用户手动触发发送暂存的图片或文件
+    func sendPendingContent() {
+        guard !isSendingContent else { return }
+
+        if let imageData = pendingImageData, let meta = pendingImageMetadata {
+            sendPendingImage(data: imageData, meta: meta)
+        } else if let fileURL = pendingFileURL {
+            sendPendingFile(url: fileURL)
+        }
+    }
+
+    /// 发送暂存的图片
+    private func sendPendingImage(data: Data, meta: ClipboardImageMetadata) {
+        isSendingContent = true
+        let totalChunks = Int(ceil(Double(data.count) / Double(Self.chunkSize)))
+        let chunkInfo = totalChunks > 1 ? " (共 \(totalChunks) 片)" : ""
+        sendProgress = "正在发送图片\(chunkInfo)..."
+
+        let timestamp = Date().timeIntervalSince1970
+        lastSentTimestamp = timestamp
+        let currentSSID = CWWiFiClient.shared().interface()?.ssid()
+        let msg = SyncMessage(
+            type: .clipboardImage,
+            content: "",
+            timestamp: timestamp,
+            deviceId: ProtocolConst.deviceId,
+            mimeType: "image/jpeg",
+            networkSSID: currentSSID,
+            fileName: meta.fileName,
+            fileSize: meta.fileSize,
+            imageWidth: meta.width,
+            imageHeight: meta.height,
+            format: meta.format
+        )
+        sendWithChunking(basePayload: msg, rawData: data, onChunkSent: { [weak self] index, total in
+            DispatchQueue.main.async {
+                self?.sendProgress = "正在发送图片... (\(index + 1)/\(total))"
+            }
+        }, onComplete: { [weak self] in
+            DispatchQueue.main.async {
+                self?.sendProgress = "图片已发送 ✓"
+                self?.isSendingContent = false
+                self?.addRecord("[图片]", direction: .sent)
+                // 3 秒后自动清除发送状态
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if self?.sendProgress == "图片已发送 ✓" {
+                        self?.clearPendingContent()
+                    }
+                }
+            }
+        })
+    }
+
+    /// 发送暂存的文件
+    private func sendPendingFile(url: URL) {
+        guard let fileData = try? Data(contentsOf: url) else {
+            sendProgress = "读取文件失败"
+            isSendingContent = false
+            return
+        }
+
+        isSendingContent = true
+        let totalChunks = Int(ceil(Double(fileData.count) / Double(Self.chunkSize)))
+        let chunkInfo = totalChunks > 1 ? " (共 \(totalChunks) 片)" : ""
+        sendProgress = "正在发送文件\(chunkInfo)..."
+
+        let timestamp = Date().timeIntervalSince1970
+        lastSentTimestamp = timestamp
+        let msg = SyncMessage(
+            type: .clipboardFile,
+            content: "",
+            timestamp: timestamp,
+            deviceId: ProtocolConst.deviceId,
+            mimeType: nil,
+            networkSSID: nil,
+            fileName: url.lastPathComponent,
+            fileSize: fileData.count
+        )
+        sendWithChunking(basePayload: msg, rawData: fileData, onChunkSent: { [weak self] index, total in
+            DispatchQueue.main.async {
+                self?.sendProgress = "正在发送文件... (\(index + 1)/\(total))"
+            }
+        }, onComplete: { [weak self] in
+            DispatchQueue.main.async {
+                self?.sendProgress = "文件已发送 ✓"
+                self?.isSendingContent = false
+                self?.addRecord("[文件] \(url.lastPathComponent)", direction: .sent)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    if self?.sendProgress == "文件已发送 ✓" {
+                        self?.clearPendingContent()
+                    }
+                }
+            }
+        })
     }
 
     /// 根据当前连接模式选择发送途径：LAN 优先，中继后备
@@ -588,10 +694,17 @@ class SyncManager: ObservableObject {
     // MARK: - 分片发送
 
     /// 将大数据分片发送（>500KB 自动分片，否则单条发送）
-    private func sendWithChunking(basePayload: SyncMessage, rawData: Data) {
+    /// - Parameters:
+    ///   - onChunkSent: 每发送一个分片后回调 (当前索引, 总分片数)
+    ///   - onComplete: 全部发送完成后回调
+    private func sendWithChunking(basePayload: SyncMessage, rawData: Data,
+                                  onChunkSent: ((Int, Int) -> Void)? = nil,
+                                  onComplete: (() -> Void)? = nil) {
         guard rawData.count > Self.chunkThreshold else {
             // 不超过阈值，直接发送
+            onChunkSent?(0, 1)
             sendOrBroadcast(basePayload)
+            onComplete?()
             return
         }
 
@@ -609,7 +722,6 @@ class SyncManager: ObservableObject {
             if i == 0 {
                 // 首片使用原始 type，带完整元数据
                 var msg = basePayload
-                // 创建新的 SyncMessage 副本（content 是 let，需重建）
                 msg = SyncMessage(
                     type: basePayload.type,
                     content: base64,
@@ -632,7 +744,6 @@ class SyncManager: ObservableObject {
                 )
                 sendOrBroadcast(msg)
             } else {
-                // 后续片使用 clipboardDataChunk
                 let chunkMsg = SyncMessage(
                     type: .clipboardDataChunk,
                     content: base64,
@@ -646,7 +757,19 @@ class SyncManager: ObservableObject {
                 )
                 sendOrBroadcast(chunkMsg)
             }
+
+            onChunkSent?(i, totalChunks)
+
+            // 最后一片发送完后触发完成回调
+            if i == totalChunks - 1 {
+                onComplete?()
+            }
         }
+    }
+
+    /// 发送图片消息（对外接口，无进度回调的简化版）
+    func sendImageMessage(_ msg: SyncMessage, rawData: Data) {
+        sendWithChunking(basePayload: msg, rawData: rawData)
     }
 
     // MARK: - 文件接收
@@ -703,13 +826,6 @@ class SyncManager: ObservableObject {
         }
     }
 
-    // MARK: - 分片图片发送（对外接口）
-
-    /// 发送图片消息（自动判断是否需要分片）
-    func sendImageMessage(_ msg: SyncMessage, rawData: Data) {
-        sendWithChunking(basePayload: msg, rawData: rawData)
-    }
-
     /// 收到远程内容时触发（用于菜单栏弹窗等视觉反馈）
     var onContentReceived: (() -> Void)?
 
@@ -717,6 +833,18 @@ class SyncManager: ObservableObject {
     @Published var lastReceivedFilePath: String?
     /// 最近一次接收的文件名
     @Published var lastReceivedFileName: String?
+
+    // MARK: - 暂存待发（图片/文件不自动发送，需用户手动触发）
+    /// 暂存的图片数据
+    @Published var pendingImageData: Data?
+    /// 暂存的图片元数据
+    @Published var pendingImageMetadata: ClipboardImageMetadata?
+    /// 暂存的文件 URL
+    @Published var pendingFileURL: URL?
+    /// 发送进度描述
+    @Published var sendProgress: String = ""
+    /// 是否正在发送中
+    @Published var isSendingContent: Bool = false
 
     // MARK: - 系统通知
 

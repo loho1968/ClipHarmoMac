@@ -1,4 +1,4 @@
-import { SyncManager, SyncStatus, SyncRecord, ConnectionMode, getSharedSyncManager } from '../model/SyncManager'
+import { SyncManager, SyncStatus, SyncRecord, ConnectionMode, getSharedSyncManager, PendingFile } from '../model/SyncManager'
 import { NetworkProfile } from '../model/NetworkContextManager'
 import { ProtocolConst } from '../common/Protocol'
 import { pasteboard } from '@kit.BasicServicesKit'
@@ -42,6 +42,14 @@ struct Index {
   // 保存目录设置
   @State saveDir: string = ''
 
+  // 保存对话框
+  @State showSaveDialog: boolean = false
+  @State pendingFile: PendingFile | null = null
+  @State saveCountdown: number = 3
+  @State hasSaveDir: boolean = false
+
+  private saveCountdownTimerId: number = -1
+
   private syncManager: SyncManager = getSharedSyncManager()
 
   aboutToAppear(): void {
@@ -71,6 +79,11 @@ struct Index {
       this.rememberIP = macIP
       this.rememberMacId = macDeviceId
       this.showRememberPrompt = true
+    }
+
+    // 收到图片/文件回调
+    this.syncManager.onPendingFileReceived = (file: PendingFile) => {
+      this.processPendingFile(file)
     }
 
     // 加载已保存的网络 Profile 列表
@@ -103,62 +116,70 @@ struct Index {
 
   build() {
     Navigation() {
-      Column({ space: 0 }) {
-        // 顶部状态卡片
-        this.StatusCard()
+      Stack() {
+        Column({ space: 0 }) {
+          // 顶部状态卡片
+          this.StatusCard()
 
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 记住此网络 提示（条件显示）
-        if (this.showRememberPrompt) {
-          this.RememberPrompt()
           Divider().margin({ top: 12, bottom: 12 })
+
+          // 记住此网络 提示（条件显示）
+          if (this.showRememberPrompt) {
+            this.RememberPrompt()
+            Divider().margin({ top: 12, bottom: 12 })
+          }
+
+          // 已知网络列表
+          this.NetworkSection()
+
+          Divider().margin({ top: 12, bottom: 12 })
+
+          // 云中继配对区域
+          this.RelaySection()
+
+          Divider().margin({ top: 12, bottom: 12 })
+
+          // 手动连接区域（备选）
+          this.ManualConnectSection()
+
+          Divider().margin({ top: 12, bottom: 12 })
+
+          // 手动发送（降级方案，无需读剪贴板权限）
+          this.ManualSendSection()
+
+          Divider().margin({ top: 12, bottom: 12 })
+
+          // 图片发送
+          this.ImageSendSection()
+
+          Divider().margin({ top: 12, bottom: 12 })
+
+          // 保存目录设置
+          this.SaveDirectorySection()
+
+          Divider().margin({ top: 12, bottom: 12 })
+
+          // 同步历史
+          this.HistorySection()
+
+          // 版本号
+          Text('v' + ProtocolConst.APP_VERSION)
+            .fontSize(10)
+            .fontColor('#CCCCCC')
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .margin({ top: 8 })
         }
+        .width('100%')
+        .height('100%')
+        .padding(16)
 
-        // 已知网络列表
-        this.NetworkSection()
-
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 云中继配对区域
-        this.RelaySection()
-
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 手动连接区域（备选）
-        this.ManualConnectSection()
-
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 手动发送（降级方案，无需读剪贴板权限）
-        this.ManualSendSection()
-
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 图片发送
-        this.ImageSendSection()
-
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 保存目录设置
-        this.SaveDirectorySection()
-
-        Divider().margin({ top: 12, bottom: 12 })
-
-        // 同步历史
-        this.HistorySection()
-
-        // 版本号
-        Text('v' + ProtocolConst.APP_VERSION)
-          .fontSize(10)
-          .fontColor('#CCCCCC')
-          .width('100%')
-          .textAlign(TextAlign.Center)
-          .margin({ top: 8 })
+        if (this.showSaveDialog) {
+          this.SaveDialogOverlay()
+        }
       }
       .width('100%')
       .height('100%')
-      .padding(16)
     }
     .title('剪贴板同步')
     .titleMode(NavigationTitleMode.Mini)
@@ -601,21 +622,29 @@ struct Index {
   @Builder
   ImageSendSection() {
     Column({ space: 8 }) {
-      Text('图片发送')
+      Text('文件发送')
         .fontSize(14)
         .fontWeight(FontWeight.Medium)
 
-      Text('从相册或文件中选择图片，发送到 Mac 端')
+      Text('从相册或文件中选择，发送到 Mac 端')
         .fontSize(10)
         .fontColor('#999999')
 
-      Button('选择图片')
-        .fontSize(13)
-        .height(36)
-        .width(120)
-        .onClick(() => {
-          this.syncManager.selectAndSendImage()
-        })
+      Row({ space: 12 }) {
+        Button('选择图片')
+          .fontSize(13)
+          .height(36)
+          .onClick(() => {
+            this.syncManager.selectAndSendImage()
+          })
+
+        Button('选择文件')
+          .fontSize(13)
+          .height(36)
+          .onClick(() => {
+            this.syncManager.selectAndSendFile()
+          })
+      }
     }
     .width('100%')
     .padding(16)
@@ -727,6 +756,76 @@ struct Index {
 
   // ============ 扫码 ============
 
+  @Builder
+  SaveDialogOverlay() {
+    Column() {
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor('rgba(0,0,0,0.4)')
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => { /* block touch through */ })
+
+    Column({ space: 16 }) {
+      Text(this.pendingFile?.isImage ? '收到图片' : '收到文件')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#333333')
+
+      Column({ space: 4 }) {
+        Text(this.pendingFile?.fileName ?? '')
+          .fontSize(13)
+          .fontColor('#666666')
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+        Text(this.formatFileSize(this.pendingFile?.fileSize ?? 0))
+          .fontSize(12)
+          .fontColor('#999999')
+      }
+      .alignItems(HorizontalAlign.Center)
+
+      if (this.hasSaveDir) {
+        Text(this.saveCountdown + ' 秒后自动保存到默认目录')
+          .fontSize(12)
+          .fontColor('#FF9800')
+      }
+
+      Row({ space: 12 }) {
+        if (this.hasSaveDir) {
+          Button('保存 (默认)')
+            .fontSize(13)
+            .backgroundColor('#4CAF50')
+            .onClick(() => {
+              this.doSaveFile(SaveDirectoryManager.getInstance().getCurrentDirectory())
+            })
+        }
+
+        Button('选择保存目录')
+          .fontSize(13)
+          .backgroundColor('#2196F3')
+          .onClick(() => {
+            this.pickDirectoryAndSave()
+          })
+
+        if (!this.hasSaveDir) {
+          Button('跳过')
+            .fontSize(13)
+            .backgroundColor('#CCCCCC')
+            .onClick(() => {
+              this.showSaveDialog = false
+              this.pendingFile = null
+            })
+        }
+      }
+    }
+    .width('85%')
+    .backgroundColor(Color.White)
+    .borderRadius(16)
+    .padding({ top: 24, bottom: 24, left: 20, right: 20 })
+  }
+
   private startScan(): void {
     qrResultHolder.data = ''
     router.pushUrl({
@@ -749,6 +848,85 @@ struct Index {
       }
     } catch (_e) {
       console.error('[Index] selectSaveDirectory failed')
+    }
+  }
+
+  // ============ 保存对话框 ============
+
+  private processPendingFile(file: PendingFile): void {
+    const defaultDir = SaveDirectoryManager.getInstance().getCurrentDirectory()
+    this.hasSaveDir = defaultDir.length > 0 && !defaultDir.includes('ClipboardSync')
+    this.pendingFile = file
+    this.showSaveDialog = true
+
+    if (this.hasSaveDir) {
+      this.startSaveCountdown()
+    }
+  }
+
+  private async doSaveFile(dirPath: string): Promise<void> {
+    if (!this.pendingFile) {
+      return
+    }
+    const fileId = this.pendingFile.id
+    const fileName = this.pendingFile.fileName
+    this.showSaveDialog = false
+    this.cancelSaveCountdown()
+
+    const savedPath = await this.syncManager.savePendingFile(fileId, dirPath)
+    this.pendingFile = null
+
+    if (savedPath.length > 0) {
+      console.info('[Index] File saved: ' + savedPath)
+    }
+  }
+
+  private startSaveCountdown(): void {
+    this.cancelSaveCountdown()
+    this.saveCountdown = 3
+    this.saveCountdownTimerId = setInterval(() => {
+      this.saveCountdown--
+      if (this.saveCountdown <= 0) {
+        this.cancelSaveCountdown()
+        if (this.hasSaveDir && this.pendingFile) {
+          this.doSaveFile(SaveDirectoryManager.getInstance().getCurrentDirectory())
+        }
+      }
+    }, 1000) as number
+  }
+
+  private cancelSaveCountdown(): void {
+    if (this.saveCountdownTimerId !== -1) {
+      clearInterval(this.saveCountdownTimerId)
+      this.saveCountdownTimerId = -1
+    }
+  }
+
+  private async pickDirectoryAndSave(): Promise<void> {
+    this.cancelSaveCountdown()
+    try {
+      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext
+      const options = new picker.DocumentSelectOptions()
+      options.maxSelectNumber = 1
+      const documentPicker = new picker.DocumentViewPicker(ctx)
+      const result: string[] = await documentPicker.select(options)
+      if (result.length > 0) {
+        SaveDirectoryManager.getInstance().setDirectory(result[0])
+        this.saveDir = result[0]
+        this.doSaveFile(result[0])
+      }
+    } catch (_e) {
+      console.error('[Index] pickDirectoryAndSave failed')
+    }
+  }
+
+  private formatFileSize(bytes: number): string {
+    if (bytes < 1024) {
+      return bytes + ' B'
+    } else if (bytes < 1024 * 1024) {
+      return (bytes / 1024).toFixed(1) + ' KB'
+    } else {
+      return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
     }
   }
 

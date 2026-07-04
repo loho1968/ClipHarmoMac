@@ -1,16 +1,32 @@
 import { UIAbility, AbilityConstant, Want, bundleManager, wantAgent, WantAgent } from '@kit.AbilityKit'
 import { window } from '@kit.ArkUI'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
-import { getSharedSyncManager, SyncStatus } from '../model/SyncManager'
+import { notificationManager } from '@kit.NotificationKit'
+import { getSharedSyncManager, SyncStatus, ConnectionMode } from '../model/SyncManager'
 import { RelayConfig } from '../common/Protocol'
+
+const NOTIFICATION_ID: number = 1001
 
 export default class EntryAbility extends UIAbility {
   private isBackgroundRunning: boolean = false
+  private isNotificationPublished: boolean = false
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[ClipboardSync] EntryAbility onCreate')
-    // 预加载中继服务器配置（从 rawfile/relay_config.json）
     RelayConfig.loadConfig(this.context)
+    this.handleIncomingWant(want)
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    console.info('[ClipboardSync] EntryAbility onNewWant')
+    this.handleIncomingWant(want)
+  }
+
+  private handleIncomingWant(want: Want): void {
+    if (want.action === 'ohos.want.action.sendData') {
+      console.info('[ClipboardSync] Received share want, forwarding to SyncManager')
+      getSharedSyncManager().handleSharedContent(want)
+    }
   }
 
   onDestroy(): void {
@@ -73,18 +89,22 @@ export default class EntryAbility extends UIAbility {
 
       await backgroundTaskManager.startBackgroundRunning(
         this.context,
-        backgroundTaskManager.BackgroundMode.DATA_TRANSFER,
+        backgroundTaskManager.BackgroundMode.MULTI_DEVICE_CONNECTION,
         agent
       )
 
       this.isBackgroundRunning = true
-      console.info('[ClipboardSync] Background running started (DATA_TRANSFER)')
+      console.info('[ClipboardSync] Background running started (MULTI_DEVICE_CONNECTION)')
+
+      await this.publishNotification(agent)
     } catch (err) {
       console.error('[ClipboardSync] startBackgroundRunning failed: ' + JSON.stringify(err))
     }
   }
 
   private async stopBackgroundRunning(): Promise<void> {
+    await this.cancelNotification()
+
     if (!this.isBackgroundRunning) {
       return
     }
@@ -95,6 +115,52 @@ export default class EntryAbility extends UIAbility {
       console.info('[ClipboardSync] Background running stopped')
     } catch (err) {
       console.error('[ClipboardSync] stopBackgroundRunning failed: ' + JSON.stringify(err))
+    }
+  }
+
+  private async publishNotification(agent: WantAgent): Promise<void> {
+    try {
+      const syncManager = getSharedSyncManager()
+      let modeText: string = '未知'
+      if (syncManager.connectionMode === ConnectionMode.LAN) {
+        modeText = '局域网'
+      } else if (syncManager.connectionMode === ConnectionMode.RELAY) {
+        modeText = '云中继'
+      }
+
+      const request: notificationManager.NotificationRequest = {
+        id: NOTIFICATION_ID,
+        content: {
+          notificationContentType: notificationManager.ContentType
+            .NOTIFICATION_CONTENT_BASIC_TEXT,
+          normal: {
+            title: 'ClipboardSync',
+            text: '剪贴板同步正在运行 · ' + modeText
+          }
+        },
+        isOngoing: true,
+        wantAgent: agent
+      }
+
+      await notificationManager.publish(request)
+      this.isNotificationPublished = true
+      console.info('[ClipboardSync] Notification published')
+    } catch (err) {
+      console.error('[ClipboardSync] publishNotification failed: ' + JSON.stringify(err))
+    }
+  }
+
+  private async cancelNotification(): Promise<void> {
+    if (!this.isNotificationPublished) {
+      return
+    }
+
+    try {
+      await notificationManager.cancel(NOTIFICATION_ID)
+      this.isNotificationPublished = false
+      console.info('[ClipboardSync] Notification cancelled')
+    } catch (err) {
+      console.error('[ClipboardSync] cancelNotification failed: ' + JSON.stringify(err))
     }
   }
 }
