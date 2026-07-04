@@ -472,6 +472,12 @@ struct Index {
         Text('正在搜索局域网中的 Mac 设备...')
           .fontSize(12)
           .fontColor('#999999')
+        if (this.syncManager.discoveryLog.length > 0) {
+          Text(this.syncManager.discoveryLog)
+            .fontSize(10)
+            .fontColor('#FF9800')
+            .margin({ top: 4 })
+        }
       } else if (this.syncStatus === SyncStatus.CONNECTED) {
         Row({ space: 4 }) {
           Image($r('sys.symbol.checkmark_circle'))

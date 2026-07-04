@@ -176,12 +176,12 @@ export class SyncManager {
 
     // 启动 TCP 发现服务（Mac 通过 TCP 告知自己的 IP）
     this.discoveryTCP.onMacIPFound = (macIP: string) => {
-      console.info('[SyncManager] Mac IP discovered via TCP: ' + macIP)
-      this._discoveryLog = 'TCP发现Mac IP=' + macIP
+      console.info('[SyncManager] TCP反向发现: Mac IP=' + macIP)
+      this._discoveryLog = 'TCP 反向发现 Mac: ' + macIP
       this.onStateChange?.()
       // TCP 已连接则跳过，否则总是尝试（即使中继已连接，LAN 优先）
       if (this.tcpClient.connected) {
-        console.info('[SyncManager] TCP already connected, skip')
+        console.info('[SyncManager] TCP反向发现: TCP已连接，跳过')
         return
       }
       this.setupTcpClient(macIP)
@@ -226,13 +226,13 @@ export class SyncManager {
   // ============ 设备发现处理 ============
 
   private handleDeviceFound(deviceId: string, ip: string, port: number): void {
-    console.info('[SyncManager] handleDeviceFound: device=' + deviceId + ' ip=' + ip + ' tcpConnected=' + this.tcpClient.connected)
+    console.info('[SyncManager] UDP发现: device=' + deviceId + ' ip=' + ip + ' tcpConnected=' + this.tcpClient.connected)
     // 即使中继已连接也尝试 TCP：LAN 优先，且需要 TCP 接收 roomKeyInfo
     if (this.tcpClient.connected) {
-      console.info('[SyncManager] handleDeviceFound: TCP already connected, skip')
+      console.info('[SyncManager] UDP发现: TCP已连接，跳过')
       return
     }
-    this._discoveryLog = 'UDP发现设备 ip=' + ip
+    this._discoveryLog = 'UDP 发现 Mac: ' + ip
     this._lastDiscoveredMacId = deviceId
     this.onStateChange?.()
     this.setupTcpClient(ip)

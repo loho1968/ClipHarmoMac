@@ -60,12 +60,12 @@ swift build
 ```
 
 ## 工作断点
-- **正在做**: 项目文档体系建设（已完成 DECISIONS.md + CONTEXT.md）；功能开发已基本完成，处于稳定阶段
+- **正在做**: 状态审计 — 发现 PROJECT.md 严重过时，P0/P1 大部分已实现但文档未更新
 - **卡在哪里**: 无阻塞问题
 - **下一步**: 
-  1. 修复 module cache 问题（`rm -rf .build && swift build`）
-  2. 验证构建通过
-  3. 确认 git commit + push（当前有未提交的文件！）
+  1. ✅ PROJECT.md 已更新对齐真实状态
+  2. 剩余真正待办：鸿蒙端后台保活（P1）、端到端加密（P2）、鸿蒙后台降级（P2）
+  3. 构建验证通过
 
 ## 关键决策
 - ADR-001 ~ 011 已记录在 `DECISIONS.md`，涵盖双模架构、协议设计、分片策略、配对机制等
@@ -74,6 +74,7 @@ swift build
 
 ## 待清理
 - [x] 无 stash
-- [ ] ⚠️ **README.md 有未提交修改**（`git status` 显示 working tree clean，但 commit 是 `fe0e8c6 临时提交`，可能有些改动未包含在 commit 中）
-- [ ] `.build/` 缓存需要在新路径下重建
-- [ ] `.ai/` 下几个空文件（DECISIONS.md, HANDOFF.md 旧版, CONTEXT.md）已被根目录同名文件替代，可清理
+- [x] README.md 已提交
+- [x] `.build/` 缓存已重建（`rm -rf .build && swift build` 通过）
+- [x] `.ai/` 下 DECISIONS.md、CONTEXT.md 已替换为正式内容（根目录版本已移除）
+- [x] PROJECT.md 已更新对齐真实状态——大部分 P0/P1 已实现

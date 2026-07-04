@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "storeFile": "./signing/ClipboardSync.p12",
-          "storePassword": "0000001BA2B37537280730245DAB898845A6D6D98542219A87ABFA8D60FA1F6EBB976FFE94E71F3F2642C0",
-          "keyAlias": "ClipboardSync",
-          "keyPassword": "0000001BE4076E11B5AF593414AAB7794653E7505AE9FC2631DF7D4B27125948A3EA0543A44399A1A723B7",
+          "certpath": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001BDB4C913911C3CB4348225F352AAD58CDEB8EE2CF93EBA13A9A596E82E5A2024B7C437ACD0B832E",
+          "profile": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.p7b",
           "signAlg": "SHA256withECDSA",
-          "profile": "./signing/ClipboardSyncDebug.p7b",
-          "certpath": "./signing/ClipboardSync.cer"
+          "storeFile": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.p12",
+          "storePassword": "0000001B53A9AA6573B8F859735D205F7A4E119FCE4F6A72E001795D690E382E8AF99EC301AE7DC2E2BC7E"
         }
       }
     ],
