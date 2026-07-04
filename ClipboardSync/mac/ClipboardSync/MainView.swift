@@ -104,6 +104,24 @@ struct MainView: View {
 
                 Spacer()
 
+                // IP 二维码按钮（始终可见，不同子网时手机扫码直连）
+                Button(action: {
+                    showLANQRCode = true
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "qrcode")
+                            .font(.system(size: 10))
+                        Text("本机IP")
+                            .font(.system(size: 11))
+                    }
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.accentColor)
+                .help("显示本机 IP 二维码，手机扫码即可直连")
+                .popover(isPresented: $showLANQRCode, arrowEdge: .bottom) {
+                    lanQRPopover
+                }
+
                 Button(action: {
                     syncManager.stop()
                     syncManager.start()
@@ -390,18 +408,6 @@ struct MainView: View {
                 Text("局域网优先")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
-                Button(action: {
-                    showLANQRCode = true
-                }) {
-                    Image(systemName: "qrcode")
-                        .font(.system(size: 9))
-                }
-                .buttonStyle(.plain)
-                .foregroundColor(.accentColor)
-                .help("显示本机 IP 二维码（手机扫码直连）")
-                .popover(isPresented: $showLANQRCode, arrowEdge: .bottom) {
-                    lanQRPopover
-                }
             }
         }
     }

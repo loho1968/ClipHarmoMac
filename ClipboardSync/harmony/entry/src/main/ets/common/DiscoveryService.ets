@@ -2,6 +2,7 @@ import { util } from '@kit.ArkTS'
 import { socket } from '@kit.NetworkKit'
 import { SyncMessage, MessageType, ProtocolConst } from '../common/Protocol'
 import { BusinessError } from '@kit.BasicServicesKit'
+import { wifiManager } from '@kit.ConnectivityKit'
 
 /**
  * UDP 设备发现服务
@@ -29,6 +30,9 @@ export class DiscoveryService {
     this.isRunning = true
 
     try {
+      // 获取本机 WiFi IP（诊断用）
+      await this.logWiFiInfo()
+
       // 创建 UDP Socket
       this.udpSocket = socket.constructUDPSocketInstance()
 
@@ -49,10 +53,6 @@ export class DiscoveryService {
         family: 1 // IPv4
       })
       console.info('[Discovery] UDP bind success on port ' + ProtocolConst.BROADCAST_PORT)
-
-      // 获取实际绑定的地址（诊断）
-      const localAddr = this.udpSocket?.getLocalAddress()
-      console.info('[Discovery] UDP local address: ' + JSON.stringify(localAddr))
 
       // 启用广播
       await this.udpSocket.setExtraOptions({
@@ -157,5 +157,20 @@ export class DiscoveryService {
     } catch (e) {
       console.error('[Discovery] handleMessage error: ' + JSON.stringify(e))
     }
+  }
+
+  private async logWiFiInfo(): Promise<void> {
+    try {
+      const linkedInfo: wifiManager.WifiLinkedInfo = await wifiManager.getLinkedInfo()
+      const ipInt: number = linkedInfo.ipAddress
+      const ipStr: string = this.intToIP(ipInt)
+      console.info('[Discovery] WiFi IP: ' + ipStr + ' SSID: ' + (linkedInfo.ssid || 'unknown'))
+    } catch (_e) {
+      console.info('[Discovery] WiFi info: not connected')
+    }
+  }
+
+  private intToIP(ip: number): string {
+    return ((ip >>> 24) & 0xFF) + '.' + ((ip >>> 16) & 0xFF) + '.' + ((ip >>> 8) & 0xFF) + '.' + (ip & 0xFF)
   }
 }

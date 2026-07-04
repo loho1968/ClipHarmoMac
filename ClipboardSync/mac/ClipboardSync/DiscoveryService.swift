@@ -27,6 +27,10 @@ class DiscoveryService {
             close(listenerSocketFd)
             listenerSocketFd = -1
         }
+        if broadcastSock >= 0 {
+            close(broadcastSock)
+            broadcastSock = -1
+        }
     }
 
     // MARK: - 监听广播
@@ -79,8 +83,13 @@ class DiscoveryService {
     private func handleBroadcastData(_ data: Data, senderIP: String) {
         guard let msg = SyncMessage.fromData(data), msg.type == .ping else { return }
 
+        print("[Discovery] Received ping from \(senderIP), deviceId=\(msg.deviceId)")
+
         // 过滤自身广播
-        if msg.deviceId == ProtocolConst.deviceId { return }
+        if msg.deviceId == ProtocolConst.deviceId {
+            print("[Discovery] Ignoring own broadcast")
+            return
+        }
 
         // 去重：已发现设备不再重复回调
         let isNewDevice = !foundDevices.contains(msg.deviceId)
@@ -102,7 +111,12 @@ class DiscoveryService {
 
     // MARK: - 发送广播
 
+    private var broadcastSock: Int32 = -1
+
     private func startBroadcasting() {
+        // 创建持久的广播发送 socket（绑定到 WiFi 接口，避免多网卡发送到错误接口）
+        createBroadcastSocket()
+
         broadcastTimer = Timer.scheduledTimer(
             withTimeInterval: ProtocolConst.broadcastInterval,
             repeats: true
@@ -112,10 +126,41 @@ class DiscoveryService {
         sendBroadcast()
     }
 
+    private func createBroadcastSocket() {
+        let sock = socket(AF_INET, SOCK_DGRAM, 0)
+        if sock < 0 {
+            print("[Discovery] sendBroadcast: failed to create socket, errno: \(errno)")
+            return
+        }
+
+        var broadcastEnable: Int32 = 1
+        setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, socklen_t(MemoryLayout.size(ofValue: broadcastEnable)))
+
+        // 绑定到广播端口（需要 SO_REUSEADDR 因为 listener 也绑定了同一端口）
+        var reuse: Int32 = 1
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout.size(ofValue: reuse)))
+
+        var bindAddr = sockaddr_in()
+        bindAddr.sin_family = sa_family_t(AF_INET)
+        bindAddr.sin_port = ProtocolConst.broadcastPort.bigEndian
+        bindAddr.sin_addr = in_addr(s_addr: INADDR_ANY.bigEndian)
+
+        if bind(sock, sockaddr_cast(&bindAddr), socklen_t(MemoryLayout.size(ofValue: bindAddr))) < 0 {
+            print("[Discovery] sendBroadcast: bind failed, errno: \(errno)")
+            close(sock)
+            return
+        }
+
+        self.broadcastSock = sock
+        print("[Discovery] Broadcast send socket created (fd=\(sock))")
+    }
+
     /// 用于发送广播的独立队列（不能和 recvfrom 共用 queue，否则 send 被阻塞）
     private let sendQueue = DispatchQueue(label: "com.clipboardsync.discovery-send")
 
     private func sendBroadcast() {
+        guard broadcastSock >= 0 else { return }
+
         let currentSSID = CWWiFiClient.shared().interface()?.ssid()
         let msg = SyncMessage(
             type: .ping,
@@ -128,33 +173,23 @@ class DiscoveryService {
 
         guard let data = msg.data else { return }
 
-        sendQueue.async {
-            let sock = socket(AF_INET, SOCK_DGRAM, 0)
-            if sock < 0 {
-                print("[Discovery] sendBroadcast: failed to create socket")
-                return
-            }
-            defer { close(sock) }
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = ProtocolConst.broadcastPort.bigEndian
+        addr.sin_addr = in_addr(s_addr: INADDR_BROADCAST.bigEndian)
 
-            var broadcastEnable: Int32 = 1
-            setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, socklen_t(MemoryLayout.size(ofValue: broadcastEnable)))
-
-            var addr = sockaddr_in()
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = ProtocolConst.broadcastPort.bigEndian
-            addr.sin_addr = in_addr(s_addr: INADDR_BROADCAST.bigEndian)
-
-            let sent = data.withUnsafeBytes { rawBufferPointer -> Int in
-                if let baseAddress = rawBufferPointer.baseAddress {
-                    return sendto(sock, baseAddress, data.count, 0,
-                                  self.sockaddr_cast(&addr),
-                                  socklen_t(MemoryLayout.size(ofValue: addr)))
-                }
-                return -1
+        let sent = data.withUnsafeBytes { rawBufferPointer -> Int in
+            if let baseAddress = rawBufferPointer.baseAddress {
+                return sendto(broadcastSock, baseAddress, data.count, 0,
+                              sockaddr_cast(&addr),
+                              socklen_t(MemoryLayout.size(ofValue: addr)))
             }
-            if sent < 0 {
-                print("[Discovery] sendBroadcast failed, errno: \(errno)")
-            }
+            return -1
+        }
+        if sent < 0 {
+            print("[Discovery] sendBroadcast failed, errno: \(errno)")
+        } else {
+            print("[Discovery] Broadcast sent (\(sent) bytes), deviceId=\(ProtocolConst.deviceId)")
         }
     }
 
