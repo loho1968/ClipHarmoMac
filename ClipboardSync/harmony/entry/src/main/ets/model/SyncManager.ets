@@ -1,4 +1,5 @@
 import { pasteboard } from '@kit.BasicServicesKit'
+import { power } from '@kit.BasicServicesKit'
 import { SyncMessage, MessageType, ProtocolConst, RelayConfig } from '../common/Protocol'
 import { DiscoveryService } from '../common/DiscoveryService'
 import { DiscoveryTCPServer } from '../common/DiscoveryTCPServer'
@@ -99,6 +100,11 @@ export class SyncManager {
   // 待保存文件队列
   private pendingFiles: PendingFile[] = []
   onPendingFileReceived?: (file: PendingFile) => void
+
+  // 后台亮屏检测 + 定时拉取
+  private backgroundPollTimerId: number = -1
+  private screenWasOff: boolean = false
+  private pollTickCount: number = 0
 
   // 状态
   private _status: SyncStatus = SyncStatus.DISCONNECTED
@@ -213,9 +219,13 @@ export class SyncManager {
 
     // 启动分片超时清理
     this.startChunkCleanup()
+
+    // 后台亮屏检测 + 定时拉取
+    this.startBackgroundPoll()
   }
 
   stop(): void {
+    this.stopBackgroundPoll()
     this.discovery.stop()
     this.discoveryTCP.stop()
     this.tcpClient.disconnect()
@@ -290,6 +300,10 @@ export class SyncManager {
 
       // 连接建立后刷新剪贴板缓存
       this.flushPendingClipboard()
+
+      setTimeout(() => {
+        this.requestRemoteClipboard()
+      }, 1500)
     }
 
     this.tcpClient.onDisconnected = () => {
@@ -469,6 +483,10 @@ export class SyncManager {
         this._status = SyncStatus.CONNECTED
       }
       this.onStateChange?.()
+
+      setTimeout(() => {
+        this.requestRemoteClipboard()
+      }, 1500)
     }
 
     this.wsClient.onPeerGone = (_deviceId: string) => {
@@ -830,6 +848,70 @@ export class SyncManager {
         this.onPendingFileReceived?.(this.pendingFiles[i])
       }
     }
+
+    setTimeout(() => {
+      this.requestRemoteClipboard()
+    }, 1500)
+  }
+
+  private requestRemoteClipboard(): void {
+    if (!this.tcpClient.connected && !this.wsClient.connected) {
+      console.info('[SyncManager] requestRemoteClipboard: not connected, skipping')
+      return
+    }
+    const msg: SyncMessage = {
+      type: MessageType.CLIPBOARD_POLL,
+      content: '',
+      timestamp: Date.now() / 1000,
+      deviceId: ProtocolConst.DEVICE_ID
+    }
+    this.sendMsg(msg)
+    console.info('[SyncManager] requestRemoteClipboard: sent CLIPBOARD_POLL')
+  }
+
+  private startBackgroundPoll(): void {
+    this.stopBackgroundPoll()
+    this.screenWasOff = false
+    this.pollTickCount = 0
+    this.backgroundPollTimerId = setInterval(() => {
+      let active: boolean = false
+      try {
+        active = power.isActive()
+      } catch (_e) { /* ignore */ }
+
+      if (!active) {
+        this.screenWasOff = true
+        return
+      }
+
+      // 亮屏时：刚亮屏立刻 POLL，或每 30 秒周期 POLL
+      if (this.screenWasOff) {
+        this.screenWasOff = false
+        this.pollTickCount = 0
+        console.info('[SyncManager] backgroundPoll: screen just woke up, polling')
+        this.requestRemoteClipboard()
+        return
+      }
+
+      this.pollTickCount++
+      // 30s / 5s = 6 ticks
+      if (this.pollTickCount >= 6) {
+        this.pollTickCount = 0
+        if (this.tcpClient.connected || this.wsClient.connected) {
+          console.info('[SyncManager] backgroundPoll: periodic poll (30s)')
+          this.requestRemoteClipboard()
+        }
+      }
+    }, 5000) as number
+    console.info('[SyncManager] backgroundPoll started (5s check, 30s poll, screen-gated)')
+  }
+
+  private stopBackgroundPoll(): void {
+    if (this.backgroundPollTimerId !== -1) {
+      clearInterval(this.backgroundPollTimerId)
+      this.backgroundPollTimerId = -1
+      console.info('[SyncManager] backgroundPoll stopped')
+    }
   }
 
   /**
@@ -1138,11 +1220,16 @@ export class SyncManager {
       console.info('[SyncManager] handleSharedContent: starting sync manager...')
       this.start()
       let waited: number = 0
-      while (this._status === SyncStatus.DISCOVERING && waited < 10000) {
+      let connected: boolean = false
+      while (waited < 10000) {
         await new Promise<void>((r: Function) => setTimeout(r, 500))
         waited += 500
+        if (this.status === SyncStatus.CONNECTED) {
+          connected = true
+          break
+        }
       }
-      if (this._status !== SyncStatus.CONNECTED) {
+      if (!connected) {
         console.warn('[SyncManager] handleSharedContent: connection timeout, aborting')
         return
       }

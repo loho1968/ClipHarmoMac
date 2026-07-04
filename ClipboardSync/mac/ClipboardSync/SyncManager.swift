@@ -386,6 +386,8 @@ class SyncManager: ObservableObject {
             }
         case .clipboardDataChunk:
             handleChunk(msg)
+        case .clipboardPoll:
+            handleClipboardPoll()
         case .ping, .pong:
             break
         case .verificationCode:
@@ -566,6 +568,50 @@ class SyncManager: ObservableObject {
             self.syncHistory.insert(record, at: 0)
             if self.syncHistory.count > 50 {
                 self.syncHistory = Array(self.syncHistory.prefix(50))
+            }
+        }
+    }
+
+    // MARK: - 剪贴板拉取（手机亮屏请求）
+
+    private func handleClipboardPoll() {
+        print("[SyncManager] ← received clipboardPoll")
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let pasteboard = NSPasteboard.general
+
+            if let text = pasteboard.string(forType: .string), !text.isEmpty {
+                let timestamp = Date().timeIntervalSince1970
+                let msg = SyncMessage(
+                    type: .clipboardText,
+                    content: text,
+                    timestamp: timestamp,
+                    deviceId: ProtocolConst.deviceId,
+                    mimeType: "text/plain"
+                )
+                self.sendOrBroadcast(msg)
+                print("[SyncManager] clipboardPoll: sending text (\(text.count) chars)")
+                return
+            }
+
+            if let tiffData = pasteboard.data(forType: .tiff),
+               let bitmap = NSBitmapImageRep(data: tiffData),
+               let jpegData = bitmap.representation(using: .jpeg, properties: [:]) {
+                let base64 = jpegData.base64EncodedString()
+                let timestamp = Date().timeIntervalSince1970
+                let msg = SyncMessage(
+                    type: .clipboardImage,
+                    content: base64,
+                    timestamp: timestamp,
+                    deviceId: ProtocolConst.deviceId,
+                    mimeType: "image/jpeg",
+                    fileSize: jpegData.count,
+                    imageWidth: bitmap.pixelsWide,
+                    imageHeight: bitmap.pixelsHigh,
+                    format: "jpeg"
+                )
+                self.sendOrBroadcast(msg)
+                print("[SyncManager] clipboardPoll: sending image (\(jpegData.count) bytes)")
             }
         }
     }

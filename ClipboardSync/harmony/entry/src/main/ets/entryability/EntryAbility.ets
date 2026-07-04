@@ -23,10 +23,11 @@ export default class EntryAbility extends UIAbility {
   }
 
   private handleIncomingWant(want: Want): void {
-    if (want.action === 'ohos.want.action.sendData') {
-      console.info('[ClipboardSync] Received share want, forwarding to SyncManager')
-      getSharedSyncManager().handleSharedContent(want)
+    if (!want || want.action !== 'ohos.want.action.sendData') {
+      return
     }
+    console.info('[ClipboardSync] Received share want, forwarding to SyncManager')
+    getSharedSyncManager().handleSharedContent(want)
   }
 
   onDestroy(): void {

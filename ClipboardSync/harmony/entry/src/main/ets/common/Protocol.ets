@@ -18,6 +18,7 @@ export enum MessageType {
   CLIPBOARD_IMAGE = 'clipboardImage',
   CLIPBOARD_FILE = 'clipboardFile',
   CLIPBOARD_DATA_CHUNK = 'clipboardDataChunk',
+  CLIPBOARD_POLL = 'clipboardPoll',
   PING = 'ping',
   PONG = 'pong',
   // Mac → 手机，TCP 连接建立后自动发送 roomKey 和 relayHost

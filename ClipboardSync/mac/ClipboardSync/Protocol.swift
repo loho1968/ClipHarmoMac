@@ -24,6 +24,7 @@ enum MessageType: String, Codable {
     case clipboardImage
     case clipboardFile
     case clipboardDataChunk
+    case clipboardPoll
     case ping
     case pong
     /// Mac → 手机，TCP 连接建立后自动发送 roomKey 和 relayHost
