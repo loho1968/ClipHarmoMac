@@ -14,6 +14,7 @@ import { fileIo, picker } from '@kit.CoreFileKit'
 import { SaveDirectoryManager } from '../model/SaveDirectoryManager'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import { Want } from '@kit.AbilityKit'
+import { CryptoModule } from '../common/CryptoModule'
 
 // 同步记录
 export interface SyncRecord {
@@ -78,6 +79,8 @@ export class SyncManager {
   private oldTcpClient: TCPClient | null = null
   private wsClient: WSClient = new WSClient()
   private networkCtx: NetworkContextManager = new NetworkContextManager()
+  private crypto: CryptoModule = new CryptoModule()
+  private hasSentKeyExchange: boolean = false
   private systemPasteboard: pasteboard.SystemPasteboard = pasteboard.getSystemPasteboard()
   private pollTimerId: number = -1
   private isRemoteUpdate: boolean = false
@@ -214,6 +217,9 @@ export class SyncManager {
     // 启动剪贴板监听
     this.startClipboardListener()
 
+    // 初始化加密模块
+    this.initCrypto()
+
     // 初始化中继连接
     this.initRelay()
 
@@ -238,6 +244,7 @@ export class SyncManager {
     this._connectionMode = ConnectionMode.NONE
     this._connectedDevice = ''
     this._relayPairedDeviceId = ''
+    this.hasSentKeyExchange = false
     this.onStateChange?.()
   }
 
@@ -293,6 +300,7 @@ export class SyncManager {
       this._status = SyncStatus.CONNECTED
       this._connectedDevice = ip
       this._connectionMode = ConnectionMode.LAN
+      this.initiateKeyExchangeIfNeeded()
       this.onStateChange?.()
 
       // 检查是否需要提示用户记住此网络
@@ -482,6 +490,7 @@ export class SyncManager {
         this._connectionMode = ConnectionMode.RELAY
         this._status = SyncStatus.CONNECTED
       }
+      this.initiateKeyExchangeIfNeeded()
       this.onStateChange?.()
 
       setTimeout(() => {
@@ -501,6 +510,75 @@ export class SyncManager {
       this.onStateChange?.()
     }
   }
+
+  // ============ 加密模块初始化 ============
+
+  private async initCrypto(): Promise<void> {
+    try {
+      if (!this.relayPrefs) {
+        const ctx = this._context
+        if (!ctx) {
+          return
+        }
+        this.relayPrefs = preferences.getPreferencesSync(ctx, { name: 'clipboardsync_relay' })
+      }
+      await this.crypto.initialize(this.relayPrefs)
+      console.info('[SyncManager] Crypto module initialized, ready=' + this.crypto.isEncryptionReady)
+    } catch (e) {
+      console.error('[SyncManager] Crypto init failed: ' + JSON.stringify(e))
+    }
+  }
+
+  private initiateKeyExchangeIfNeeded(): void {
+    if (this.hasSentKeyExchange) {
+      return
+    }
+    this.sendKeyExchange()
+  }
+
+  private sendKeyExchange(): void {
+    const msg: SyncMessage = {
+      type: MessageType.KEY_EXCHANGE,
+      content: '',
+      timestamp: Date.now() / 1000,
+      deviceId: ProtocolConst.DEVICE_ID,
+      publicKey: this.crypto.publicKeyBase64
+    }
+    // 密钥交换消息不加密，直接发送
+    if (this.tcpClient.connected) {
+      this.tcpClient.send(msg)
+    } else if (this.wsClient.connected) {
+      this.wsClient.sendRelay(msg)
+    }
+    this.hasSentKeyExchange = true
+    console.info('[SyncManager] Sent keyExchange, pk=' +
+      this.crypto.publicKeyBase64.substring(0, 16) + '...')
+  }
+
+  private async handleKeyExchange(msg: SyncMessage): Promise<void> {
+    const publicKeyBase64 = msg.publicKey || ''
+    if (publicKeyBase64.length === 0) {
+      console.info('[SyncManager] keyExchange received without publicKey')
+      return
+    }
+
+    console.info('[SyncManager] Received keyExchange from ' + msg.deviceId)
+
+    await this.crypto.establishSession(publicKeyBase64)
+
+    if (this.crypto.isEncryptionReady && this.relayPrefs) {
+      this.crypto.savePeerPublicKey(this.relayPrefs, publicKeyBase64)
+
+      // 如果本端还未发送公钥，回复之
+      if (!this.hasSentKeyExchange) {
+        this.sendKeyExchange()
+      }
+
+      console.info('[SyncManager] Key exchange complete, encryption active')
+    }
+  }
+
+  // ============ 中继连接 ============
 
   private async initRelay(): Promise<void> {
     console.info('[SyncManager] initRelay() called')
@@ -595,47 +673,94 @@ export class SyncManager {
     if (this.relayPrefs) {
       this.relayPrefs.putSync(RelayConfig.ROOM_KEY_STORAGE_KEY, '')
       this.relayPrefs.flush()
+      this.crypto.clearSession(this.relayPrefs)
     }
     this.wsClient.disconnect()
     this._relayPairedDeviceId = ''
     this._relayStatusText = ''
+    this.hasSentKeyExchange = false
     this.onStateChange?.()
   }
 
   // ============ 接收远端消息 ============
 
-  private handleRemoteMessage(msg: SyncMessage): void {
+  private async handleRemoteMessage(msg: SyncMessage): Promise<void> {
+    let decryptedMsg = msg
+
+    // 密钥交换（必须在解密之前处理）
+    if (msg.type === MessageType.KEY_EXCHANGE) {
+      await this.handleKeyExchange(msg)
+      return
+    }
+
+    // 解密数据消息
+    if (this.shouldEncryptType(msg.type) && this.crypto.isEncryptionReady) {
+      try {
+        decryptedMsg.content = await this.crypto.decrypt(
+          msg.content,
+          msg.deviceId,
+          msg.type
+        )
+        // 用一个带解密后 content 的新对象继续
+        decryptedMsg = {
+          type: msg.type,
+          content: decryptedMsg.content,
+          timestamp: msg.timestamp,
+          deviceId: msg.deviceId,
+          mimeType: msg.mimeType,
+          networkSSID: msg.networkSSID,
+          roomKey: msg.roomKey,
+          relayHost: msg.relayHost,
+          publicKey: msg.publicKey,
+          transferId: msg.transferId,
+          chunkIndex: msg.chunkIndex,
+          totalChunks: msg.totalChunks,
+          fileName: msg.fileName,
+          fileSize: msg.fileSize,
+          imageWidth: msg.imageWidth,
+          imageHeight: msg.imageHeight,
+          format: msg.format,
+          fileCount: msg.fileCount
+        }
+      } catch (e) {
+        console.error('[SyncManager] Decryption failed: ' + JSON.stringify(e))
+        return // 丢弃无法解密的消息
+      }
+    }
+
     // roomKeyInfo 消息不参与去重判断
-    if (msg.type === MessageType.ROOM_KEY_INFO) {
-      this.handleRoomKeyInfo(msg)
+    if (decryptedMsg.type === MessageType.ROOM_KEY_INFO) {
+      this.handleRoomKeyInfo(decryptedMsg)
       return
     }
 
     // 去重检查：仅忽略自己刚发出去的消息回环
-    if (msg.timestamp <= this.lastSentTimestamp && msg.deviceId === ProtocolConst.DEVICE_ID) {
+    if (decryptedMsg.timestamp <= this.lastSentTimestamp &&
+        decryptedMsg.deviceId === ProtocolConst.DEVICE_ID) {
       return
     }
 
-    switch (msg.type) {
+    switch (decryptedMsg.type) {
       case MessageType.CLIPBOARD_TEXT:
-        this.writeClipboardText(msg.content)
-        this.addRecord(msg.content, 'received')
+        this.writeClipboardText(decryptedMsg.content)
+        this.addRecord(decryptedMsg.content, 'received')
         break
       case MessageType.CLIPBOARD_IMAGE:
-        if (!this.handleChunk(msg)) {
-          this.writeClipboardImage(msg)
+        if (!this.handleChunk(decryptedMsg)) {
+          this.writeClipboardImage(decryptedMsg)
         }
         break
       case MessageType.CLIPBOARD_FILE:
-        if (!this.handleChunk(msg)) {
-          this.writeClipboardFile(msg)
+        if (!this.handleChunk(decryptedMsg)) {
+          this.writeClipboardFile(decryptedMsg)
         }
         break
       case MessageType.CLIPBOARD_DATA_CHUNK:
-        this.handleChunk(msg)
+        this.handleChunk(decryptedMsg)
         break
       case MessageType.PING:
       case MessageType.PONG:
+      case MessageType.KEY_EXCHANGE:
         break
     }
 
@@ -865,7 +990,7 @@ export class SyncManager {
       timestamp: Date.now() / 1000,
       deviceId: ProtocolConst.DEVICE_ID
     }
-    this.sendMsg(msg)
+    void this.sendMsg(msg)
     console.info('[SyncManager] requestRemoteClipboard: sent CLIPBOARD_POLL')
   }
 
@@ -1024,12 +1149,41 @@ export class SyncManager {
 
   // ============ 公共发送 ============
 
-  private sendMsg(msg: SyncMessage): void {
-    if (this.tcpClient.connected) {
-      this.tcpClient.send(msg)
-    } else if (this.wsClient.connected) {
-      this.wsClient.sendRelay(msg)
+  private async sendMsg(msg: SyncMessage): Promise<void> {
+    let msgToSend = msg
+
+    // 对数据消息进行端到端加密
+    if (this.shouldEncryptType(msg.type) && this.crypto.isEncryptionReady) {
+      try {
+        msgToSend.content = await this.crypto.encrypt(
+          msg.content,
+          msg.deviceId,
+          msg.type
+        )
+      } catch (e) {
+        console.error('[SyncManager] Encryption failed: ' + JSON.stringify(e))
+        return // 丢弃消息
+      }
     }
+
+    if (this.tcpClient.connected) {
+      this.tcpClient.send(msgToSend)
+    } else if (this.wsClient.connected) {
+      this.wsClient.sendRelay(msgToSend)
+    }
+  }
+
+  /**
+   * 判断某类消息是否需要加密
+   */
+  private shouldEncryptType(type: MessageType): boolean {
+    if (type === MessageType.CLIPBOARD_TEXT ||
+        type === MessageType.CLIPBOARD_IMAGE ||
+        type === MessageType.CLIPBOARD_FILE ||
+        type === MessageType.CLIPBOARD_DATA_CHUNK) {
+      return true
+    }
+    return false
   }
 
   // ============ 图片发送 ============
@@ -1053,7 +1207,7 @@ export class SyncManager {
 
     if (payload.size <= 500 * 1024) {
       console.info('[SyncManager] sendImage: single msg, size=' + payload.size)
-      this.sendMsg(msg)
+      void this.sendMsg(msg)
     } else {
       console.info('[SyncManager] sendImage: chunked, size=' + payload.size)
       const base64 = new util.Base64Helper()
@@ -1182,7 +1336,7 @@ export class SyncManager {
 
     if (fileSize <= 500 * 1024) {
       console.info('[SyncManager] sendFile: single msg, size=' + fileSize)
-      this.sendMsg(msg)
+      void this.sendMsg(msg)
     } else {
       console.info('[SyncManager] sendFile: chunked, size=' + fileSize)
       this.sendInChunks(msg, new Uint8Array(data))
@@ -1562,7 +1716,7 @@ export class SyncManager {
           imageHeight: basePayload.imageHeight,
           format: basePayload.format
         }
-        this.sendMsg(msg)
+        void this.sendMsg(msg)
       } else {
         const msg: SyncMessage = {
           type: MessageType.CLIPBOARD_DATA_CHUNK,
@@ -1573,7 +1727,7 @@ export class SyncManager {
           chunkIndex: i,
           totalChunks: totalChunks
         }
-        this.sendMsg(msg)
+        void this.sendMsg(msg)
       }
     }
   }

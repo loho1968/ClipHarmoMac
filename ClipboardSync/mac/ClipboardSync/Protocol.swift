@@ -31,12 +31,14 @@ enum MessageType: String, Codable {
     case roomKeyInfo
     /// 手机 → Mac，自动提取的短信验证码
     case verificationCode
+    /// ECDH P-256 公钥交换（content 为空，publicKey 字段携带公钥）
+    case keyExchange
 }
 
 /// 传输消息
 struct SyncMessage: Codable {
     let type: MessageType
-    let content: String
+    var content: String
     let timestamp: Double
     let deviceId: String
     let mimeType: String?
@@ -44,6 +46,7 @@ struct SyncMessage: Codable {
     var roomKey: String? = nil     // roomKeyInfo 消息携带：Mac 的配对码
     var relayHost: String? = nil   // roomKeyInfo 消息携带：中继服务器地址
     var smsSender: String? = nil   // verificationCode 消息携带：短信发送者号码
+    var publicKey: String? = nil    // keyExchange 消息携带：ECDH P-256 公钥（Base64）
 
     // 分片传输字段（图片和文件共用）
     var transferId: String? = nil   // UUID，标识一次传输会话

@@ -43,6 +43,10 @@ class SyncManager: ObservableObject {
     private let wsClient = WSClient()
     private let networkMonitor = NetworkMonitor()
 
+    // 端到端加密
+    private let crypto = CryptoModule()
+    private var hasSentKeyExchange = false
+
     // 去重：记录最近发送的消息时间戳，避免回环
     private var lastSentTimestamp: Double = 0
     // 标记正在处理远端消息，防止 ClipboardMonitor 级联触发
@@ -98,6 +102,7 @@ class SyncManager: ObservableObject {
         connectionMode = .none
         connectedDevice = nil
         relayPairedDeviceId = nil
+        hasSentKeyExchange = false
     }
 
     // MARK: - 网络感知
@@ -143,6 +148,7 @@ class SyncManager: ObservableObject {
                 self?.status = .connected
                 self?.connectedDevice = remoteAddr
                 self?.connectionMode = .lan
+                self?.initiateKeyExchangeIfNeeded()
             }
         }
 
@@ -218,6 +224,7 @@ class SyncManager: ObservableObject {
                     self.connectionMode = .relay
                     self.status = .connected
                 }
+                self.initiateKeyExchangeIfNeeded()
             }
         }
 
@@ -276,6 +283,8 @@ class SyncManager: ObservableObject {
     func regenerateRoomKey() {
         wsClient.disconnect()
         relayPairedDeviceId = nil
+        crypto.clearSession()
+        hasSentKeyExchange = false
         let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         let key = String((0..<RelayConfig.roomKeyLength).map { _ in chars.randomElement()! })
         RelayConfig.sharedDefaults.set(key, forKey: RelayConfig.roomKeyDefaultsKey)
@@ -333,6 +342,24 @@ class SyncManager: ObservableObject {
     }
 
     private func handleRemoteMessage(_ msg: SyncMessage) {
+        var msg = msg
+
+        // 密钥交换（必须在解密之前处理）
+        if msg.type == .keyExchange {
+            handleKeyExchange(msg)
+            return
+        }
+
+        // 解密数据消息
+        if CryptoModule.shouldEncrypt(messageType: msg.type) && crypto.isEncryptionReady {
+            do {
+                msg.content = try crypto.decrypt(msg.content, deviceId: msg.deviceId, messageType: msg.type.rawValue)
+            } catch {
+                print("[SyncManager] Decryption failed: \(error), dropping message")
+                return
+            }
+        }
+
         print("[SyncManager] ← received type=\(msg.type.rawValue) from=\(msg.deviceId) ts=\(msg.timestamp) lastSentTs=\(lastSentTimestamp)")
 
         // 去重检查：忽略自己刚发出去的消息回环
@@ -397,6 +424,9 @@ class SyncManager: ObservableObject {
             sendReceivedNotification(preview: "🔐 验证码: \(msg.content)", filePath: nil)
         case .roomKeyInfo:
             // Mac 端忽略（仅发送 roomKeyInfo 给手机，不接收）
+            break
+        case .keyExchange:
+            // 已在方法入口处理，此处仅满足 switch 完整
             break
         }
 
@@ -555,10 +585,75 @@ class SyncManager: ObservableObject {
 
     /// 根据当前连接模式选择发送途径：LAN 优先，中继后备
     private func sendOrBroadcast(_ msg: SyncMessage) {
+        var msg = msg
+
+        // 对数据消息进行端到端加密
+        if CryptoModule.shouldEncrypt(messageType: msg.type) && crypto.isEncryptionReady {
+            do {
+                msg.content = try crypto.encrypt(
+                    msg.content,
+                    deviceId: msg.deviceId,
+                    messageType: msg.type.rawValue
+                )
+            } catch {
+                print("[SyncManager] Encryption failed: \(error), dropping message")
+                return
+            }
+        }
+
         if server.connectedCount > 0 {
             server.broadcast(msg)
         } else if wsClient.isConnected {
             wsClient.sendRelay(msg)
+        }
+    }
+
+    // MARK: - 密钥交换
+
+    private func initiateKeyExchangeIfNeeded() {
+        guard !hasSentKeyExchange else { return }
+        sendKeyExchange()
+    }
+
+    private func sendKeyExchange() {
+        let msg = SyncMessage(
+            type: .keyExchange,
+            content: "",
+            timestamp: Date().timeIntervalSince1970,
+            deviceId: ProtocolConst.deviceId,
+            mimeType: nil,
+            networkSSID: nil,
+            publicKey: crypto.publicKeyBase64
+        )
+        // 密钥交换消息不经过加密处理，直接发送
+        if server.connectedCount > 0 {
+            server.broadcast(msg)
+        } else if wsClient.isConnected {
+            wsClient.sendRelay(msg)
+        }
+        hasSentKeyExchange = true
+        print("[SyncManager] Sent keyExchange, pk=\(crypto.publicKeyBase64.prefix(16))...")
+    }
+
+    private func handleKeyExchange(_ msg: SyncMessage) {
+        guard let publicKeyBase64 = msg.publicKey, !publicKeyBase64.isEmpty else {
+            print("[SyncManager] keyExchange received without publicKey")
+            return
+        }
+
+        print("[SyncManager] Received keyExchange from \(msg.deviceId)")
+
+        do {
+            try crypto.establishSession(peerPublicKeyBase64: publicKeyBase64)
+
+            // 如果本端还未发送公钥，回复之
+            if !hasSentKeyExchange {
+                sendKeyExchange()
+            }
+
+            print("[SyncManager] Key exchange complete, encryption active")
+        } catch {
+            print("[SyncManager] Key exchange failed: \(error)")
         }
     }
 
@@ -587,7 +682,8 @@ class SyncManager: ObservableObject {
                     content: text,
                     timestamp: timestamp,
                     deviceId: ProtocolConst.deviceId,
-                    mimeType: "text/plain"
+                    mimeType: "text/plain",
+                    networkSSID: nil
                 )
                 self.sendOrBroadcast(msg)
                 print("[SyncManager] clipboardPoll: sending text (\(text.count) chars)")
@@ -605,6 +701,7 @@ class SyncManager: ObservableObject {
                     timestamp: timestamp,
                     deviceId: ProtocolConst.deviceId,
                     mimeType: "image/jpeg",
+                    networkSSID: nil,
                     fileSize: jpegData.count,
                     imageWidth: bitmap.pixelsWide,
                     imageHeight: bitmap.pixelsHigh,

@@ -22,7 +22,9 @@ export enum MessageType {
   PING = 'ping',
   PONG = 'pong',
   // Mac → 手机，TCP 连接建立后自动发送 roomKey 和 relayHost
-  ROOM_KEY_INFO = 'roomKeyInfo'
+  ROOM_KEY_INFO = 'roomKeyInfo',
+  // ECDH P-256 公钥交换（content 为空，publicKey 字段携带公钥）
+  KEY_EXCHANGE = 'keyExchange'
 }
 
 // 传输消息结构
@@ -36,6 +38,8 @@ export interface SyncMessage {
   // roomKeyInfo 消息携带：Mac 的配对码和中继服务器地址
   roomKey?: string
   relayHost?: string
+  // keyExchange 消息携带：ECDH P-256 公钥（Base64）
+  publicKey?: string
   // 分片字段
   transferId?: string
   chunkIndex?: number
