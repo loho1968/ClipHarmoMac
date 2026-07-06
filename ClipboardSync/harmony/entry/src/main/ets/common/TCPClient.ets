@@ -210,9 +210,10 @@ export class TCPClient {
         if (line.length > 0) {
           try {
             const msg: SyncMessage = JSON.parse(line) as SyncMessage
+            console.info('[TCPClient] ← recv msg type=' + msg.type)
             this.onMessage?.(msg)
           } catch (_e) {
-            // JSON 解析失败
+            console.info('[TCPClient] JSON parse failed for line: ' + line.substring(0, 50))
           }
         }
       }

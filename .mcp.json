@@ -11,6 +11,18 @@
         "PROJECT_PATH": "/Users/lh/Developer/HarmonyAndMac"
       },
       "enabled": true
+    },
+    "codegraph": {
+      "type": "stdio",
+      "command": "codegraph",
+      "args": [
+        "serve",
+        "--mcp"
+      ]
+    },"codegraph-arkts": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/Users/lh/Developer/Utils/codegraph-arkts/dist/bin/codegraph.js", "serve", "--mcp"]
     }
   }
 }

@@ -76,6 +76,21 @@ export class WSClient {
     this.onStatusChange?.(this.mode)
   }
 
+  forceReconnect(url: string, roomKey: string): void {
+    console.info('[WSClient] forceReconnect() to ' + url)
+    this.shouldReconnect = true
+    this.targetUrl = url
+    this.roomKey = roomKey
+    this.closeSocket()
+    this.cleanup()
+    this.isConnected = false
+    this.isConnecting = false
+    this.reconnectAttempt = 0
+    this.mode = WSClient.CONNECTION_MODE_CONNECTING
+    this.onStatusChange?.(this.mode)
+    this.doConnect(url)
+  }
+
   /**
    * 通过中继发送剪贴板消息
    * @param msg 剪贴板同步消息

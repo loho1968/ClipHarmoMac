@@ -11,7 +11,8 @@ class DiscoveryService {
     private var foundDevices: Set<String> = []  // 已发现设备去重
     private var tcpDiscoveryDone: Set<String> = []  // 已完成TCP发现的设备，避免重复触发
 
-    var onDeviceFound: ((String, UInt16) -> Void)?
+    /// 发现设备回调：deviceId, senderIP, port
+    var onDeviceFound: ((String, String, UInt16) -> Void)?
 
     func start() {
         startBSDListener()
@@ -27,10 +28,10 @@ class DiscoveryService {
             close(listenerSocketFd)
             listenerSocketFd = -1
         }
-        if broadcastSock >= 0 {
-            close(broadcastSock)
-            broadcastSock = -1
+        for sock in broadcastSocks {
+            close(sock)
         }
+        broadcastSocks.removeAll()
     }
 
     // MARK: - 监听广播
@@ -97,9 +98,9 @@ class DiscoveryService {
             foundDevices.insert(msg.deviceId)
             print("[Discovery] Found new device: \(msg.deviceId) at \(senderIP)")
 
-            // 发现设备，回调通知
+            // 发现设备，回调通知（含 IP 地址，供 SyncManager 映射设备名）
             DispatchQueue.main.async { [weak self] in
-                self?.onDeviceFound?(msg.deviceId, ProtocolConst.wsPort)
+                self?.onDeviceFound?(msg.deviceId, senderIP, ProtocolConst.wsPort)
             }
         }
 
@@ -111,11 +112,12 @@ class DiscoveryService {
 
     // MARK: - 发送广播
 
-    private var broadcastSock: Int32 = -1
+    /// 所有活跃接口的广播发送 socket（多网卡场景下每个接口一个）
+    private var broadcastSocks: [Int32] = []
 
     private func startBroadcasting() {
-        // 创建持久的广播发送 socket（绑定到 WiFi 接口，避免多网卡发送到错误接口）
-        createBroadcastSocket()
+        // 为所有活跃网络接口创建广播发送 socket
+        createBroadcastSockets()
 
         broadcastTimer = Timer.scheduledTimer(
             withTimeInterval: ProtocolConst.broadcastInterval,
@@ -126,19 +128,97 @@ class DiscoveryService {
         sendBroadcast()
     }
 
-    private func createBroadcastSocket() {
+    /// 获取所有活跃的非回环 IPv4 接口地址
+    /// 返回 (接口名称, IP 地址字符串) 列表
+    private func activeInterfaceAddresses() -> [(String, String)] {
+        var result: [(String, String)] = []
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return result }
+        defer { freeifaddrs(ifaddr) }
+
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            // 仅活跃、非回环接口
+            guard (flags & IFF_UP) != 0 && (flags & IFF_RUNNING) != 0 else { continue }
+            guard (flags & IFF_LOOPBACK) == 0 else { continue }
+            guard let sa = ptr.pointee.ifa_addr else { continue }
+            guard sa.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(ptr.pointee.ifa_addr, socklen_t(sa.pointee.sa_len),
+                       &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            let ip = String(cString: host)
+            let name = String(cString: ptr.pointee.ifa_name)
+            result.append((name, ip))
+        }
+        return result
+    }
+
+    /// 为每个活跃网络接口创建一个绑定到该接口 IP 的广播 socket
+    private func createBroadcastSockets() {
+        let interfaces = activeInterfaceAddresses()
+        if interfaces.isEmpty {
+            print("[Discovery] No active interfaces found, falling back to INADDR_ANY")
+            createFallbackSocket()
+            return
+        }
+
+        for (ifName, ip) in interfaces {
+            let sock = socket(AF_INET, SOCK_DGRAM, 0)
+            if sock < 0 {
+                print("[Discovery] Failed to create socket for \(ifName) (\(ip))")
+                continue
+            }
+
+            var broadcastEnable: Int32 = 1
+            setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable,
+                       socklen_t(MemoryLayout.size(ofValue: broadcastEnable)))
+
+            var reuse: Int32 = 1
+            setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                       socklen_t(MemoryLayout.size(ofValue: reuse)))
+            setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &reuse,
+                       socklen_t(MemoryLayout.size(ofValue: reuse)))
+
+            // 绑定到该接口的 IP 地址，确保广播从该接口发出
+            var bindAddr = sockaddr_in()
+            bindAddr.sin_family = sa_family_t(AF_INET)
+            bindAddr.sin_port = ProtocolConst.broadcastPort.bigEndian
+            inet_pton(AF_INET, ip, &bindAddr.sin_addr)
+
+            if bind(sock, sockaddr_cast(&bindAddr), socklen_t(MemoryLayout.size(ofValue: bindAddr))) < 0 {
+                print("[Discovery] Bind failed for \(ifName) (\(ip)), errno: \(errno)")
+                close(sock)
+                continue
+            }
+
+            broadcastSocks.append(sock)
+            print("[Discovery] Broadcast socket created: \(ifName) (\(ip)), fd=\(sock)")
+        }
+
+        // 如果所有接口绑定都失败，回退到 INADDR_ANY
+        if broadcastSocks.isEmpty {
+            print("[Discovery] All interface binds failed, falling back to INADDR_ANY")
+            createFallbackSocket()
+        }
+    }
+
+    /// 回退方案：创建一个绑定到 INADDR_ANY 的 socket（兼容旧行为）
+    private func createFallbackSocket() {
         let sock = socket(AF_INET, SOCK_DGRAM, 0)
         if sock < 0 {
-            print("[Discovery] sendBroadcast: failed to create socket, errno: \(errno)")
+            print("[Discovery] Fallback socket creation failed")
             return
         }
 
         var broadcastEnable: Int32 = 1
-        setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable, socklen_t(MemoryLayout.size(ofValue: broadcastEnable)))
-
-        // 绑定到广播端口（需要 SO_REUSEADDR 因为 listener 也绑定了同一端口）
+        setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcastEnable,
+                   socklen_t(MemoryLayout.size(ofValue: broadcastEnable)))
         var reuse: Int32 = 1
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout.size(ofValue: reuse)))
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse,
+                   socklen_t(MemoryLayout.size(ofValue: reuse)))
+        setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &reuse,
+                   socklen_t(MemoryLayout.size(ofValue: reuse)))
 
         var bindAddr = sockaddr_in()
         bindAddr.sin_family = sa_family_t(AF_INET)
@@ -146,20 +226,20 @@ class DiscoveryService {
         bindAddr.sin_addr = in_addr(s_addr: INADDR_ANY.bigEndian)
 
         if bind(sock, sockaddr_cast(&bindAddr), socklen_t(MemoryLayout.size(ofValue: bindAddr))) < 0 {
-            print("[Discovery] sendBroadcast: bind failed, errno: \(errno)")
+            print("[Discovery] Fallback bind failed, errno: \(errno)")
             close(sock)
             return
         }
 
-        self.broadcastSock = sock
-        print("[Discovery] Broadcast send socket created (fd=\(sock))")
+        broadcastSocks.append(sock)
+        print("[Discovery] Fallback broadcast socket created (INADDR_ANY), fd=\(sock)")
     }
 
     /// 用于发送广播的独立队列（不能和 recvfrom 共用 queue，否则 send 被阻塞）
     private let sendQueue = DispatchQueue(label: "com.clipboardsync.discovery-send")
 
     private func sendBroadcast() {
-        guard broadcastSock >= 0 else { return }
+        guard !broadcastSocks.isEmpty else { return }
 
         let currentSSID = CWWiFiClient.shared().interface()?.ssid()
         let msg = SyncMessage(
@@ -178,19 +258,21 @@ class DiscoveryService {
         addr.sin_port = ProtocolConst.broadcastPort.bigEndian
         addr.sin_addr = in_addr(s_addr: INADDR_BROADCAST.bigEndian)
 
-        let sent = data.withUnsafeBytes { rawBufferPointer -> Int in
-            if let baseAddress = rawBufferPointer.baseAddress {
-                return sendto(broadcastSock, baseAddress, data.count, 0,
-                              sockaddr_cast(&addr),
-                              socklen_t(MemoryLayout.size(ofValue: addr)))
+        // 通过每个接口的 socket 分别发送广播
+        for sock in broadcastSocks {
+            let sent = data.withUnsafeBytes { rawBufferPointer -> Int in
+                if let baseAddress = rawBufferPointer.baseAddress {
+                    return sendto(sock, baseAddress, data.count, 0,
+                                  sockaddr_cast(&addr),
+                                  socklen_t(MemoryLayout.size(ofValue: addr)))
+                }
+                return -1
             }
-            return -1
+            if sent < 0 {
+                print("[Discovery] sendBroadcast on fd=\(sock) failed, errno: \(errno)")
+            }
         }
-        if sent < 0 {
-            print("[Discovery] sendBroadcast failed, errno: \(errno)")
-        } else {
-            print("[Discovery] Broadcast sent (\(sent) bytes), deviceId=\(ProtocolConst.deviceId)")
-        }
+        print("[Discovery] Broadcast sent via \(broadcastSocks.count) interface(s), deviceId=\(ProtocolConst.deviceId)")
     }
 
     // MARK: - TCP 发现连接

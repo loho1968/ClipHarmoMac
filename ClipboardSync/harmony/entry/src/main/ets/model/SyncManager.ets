@@ -685,6 +685,7 @@ export class SyncManager {
   // ============ 接收远端消息 ============
 
   private async handleRemoteMessage(msg: SyncMessage): Promise<void> {
+    console.info('[SyncManager] ←←← handleRemoteMessage: type=' + msg.type + ' contentLen=' + msg.content.length)
     let decryptedMsg = msg
 
     // 密钥交换（必须在解密之前处理）
@@ -742,6 +743,7 @@ export class SyncManager {
 
     switch (decryptedMsg.type) {
       case MessageType.CLIPBOARD_TEXT:
+        console.info('[SyncManager] →→→ writeClipboardText: len=' + decryptedMsg.content.length)
         this.writeClipboardText(decryptedMsg.content)
         this.addRecord(decryptedMsg.content, 'received')
         break
@@ -975,8 +977,42 @@ export class SyncManager {
     }
 
     setTimeout(() => {
-      this.requestRemoteClipboard()
+      this.addImmediatePoll()
     }, 1500)
+  }
+
+  private addImmediatePoll(): void {
+    if (this.tcpClient.connected || this.wsClient.connected) {
+      this.requestRemoteClipboard()
+    } else {
+      console.info('[SyncManager] addImmediatePoll: not connected, reconnecting')
+      void this.ensureConnectionOnWakeup()
+    }
+  }
+
+  private async ensureConnectionOnWakeup(): Promise<void> {
+    if (this.tcpClient.connected) {
+      console.info('[SyncManager] ensureConnectionOnWakeup: already connected, skipping')
+      return
+    }
+    if (this._connectingIp.length > 0) {
+      console.info('[SyncManager] ensureConnectionOnWakeup: already connecting to ' + this._connectingIp + ', skipping')
+      return
+    }
+    const ssid = this.networkCtx.getCurrentSSID()
+    if (ssid.length > 0) {
+      const profile = await this.networkCtx.getProfileBySSID(ssid)
+      if (profile && profile.macIP.length > 0) {
+        console.info('[SyncManager] Wakeup: reconnecting TCP to ' + profile.macIP)
+        this.setupTcpClient(profile.macIP)
+        return
+      }
+    }
+    if (this._roomKey.length > 0) {
+      const url = RelayConfig.buildURL(this._relayServerHost)
+      console.info('[SyncManager] Wakeup: reconnecting WS to ' + url)
+      this.wsClient.forceReconnect(url, this._roomKey)
+    }
   }
 
   private requestRemoteClipboard(): void {
@@ -1009,12 +1045,12 @@ export class SyncManager {
         return
       }
 
-      // 亮屏时：刚亮屏立刻 POLL，或每 30 秒周期 POLL
+      // 亮屏时：强制重连，重连成功后回调中会自动 POLL
       if (this.screenWasOff) {
         this.screenWasOff = false
         this.pollTickCount = 0
-        console.info('[SyncManager] backgroundPoll: screen just woke up, polling')
-        this.requestRemoteClipboard()
+        console.info('[SyncManager] backgroundPoll: screen just woke up, reconnecting')
+        void this.ensureConnectionOnWakeup()
         return
       }
 
@@ -1025,6 +1061,9 @@ export class SyncManager {
         if (this.tcpClient.connected || this.wsClient.connected) {
           console.info('[SyncManager] backgroundPoll: periodic poll (30s)')
           this.requestRemoteClipboard()
+        } else {
+          console.info('[SyncManager] backgroundPoll: not connected, reconnecting')
+          void this.ensureConnectionOnWakeup()
         }
       }
     }, 5000) as number

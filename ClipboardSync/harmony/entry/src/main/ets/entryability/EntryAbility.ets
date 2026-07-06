@@ -52,21 +52,15 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     console.info('[ClipboardSync] EntryAbility onForeground')
-    this.stopBackgroundRunning()
     getSharedSyncManager().onAppForeground()
   }
 
   onBackground(): void {
     console.info('[ClipboardSync] EntryAbility onBackground')
-    this.startBackgroundRunning()
+    void this.startBackgroundRunning()
   }
 
   private async startBackgroundRunning(): Promise<void> {
-    const syncManager = getSharedSyncManager()
-    if (syncManager.status === SyncStatus.DISCONNECTED) {
-      console.info('[ClipboardSync] Sync not started, skip background running')
-      return
-    }
     if (this.isBackgroundRunning) {
       return
     }

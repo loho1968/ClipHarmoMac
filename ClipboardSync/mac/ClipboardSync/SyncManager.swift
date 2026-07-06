@@ -51,6 +51,8 @@ class SyncManager: ObservableObject {
     private var lastSentTimestamp: Double = 0
     // 标记正在处理远端消息，防止 ClipboardMonitor 级联触发
     private var isProcessingRemote: Bool = false
+    // UDP 发现的 IP → deviceId 映射（用于 TCP 连接时显示设备名）
+    private var deviceIPMap: [String: String] = [:]
 
     enum SyncStatus: String {
         case disconnected = "未连接"
@@ -121,6 +123,7 @@ class SyncManager: ObservableObject {
     private func restartLANServices() {
         discovery.stop()
         server.stop()
+        deviceIPMap.removeAll()
         // 短暂延迟后重启，确保旧 socket 完全释放
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self else { return }
@@ -131,24 +134,35 @@ class SyncManager: ObservableObject {
     }
 
     private func setupCallbacks() {
-        // 发现设备（UDP 广播仅用于确认对方在线，不改变连接状态）
-        discovery.onDeviceFound = { [weak self] deviceId, port in
+        // 发现设备（UDP 广播用于确认对方在线 + 建立 IP→设备名映射）
+        discovery.onDeviceFound = { [weak self] deviceId, senderIP, port in
             DispatchQueue.main.async {
-                // UDP 发现不代表 TCP 已连接，仅更新设备名（若已 TCP 连接）
-                if self?.status == .connected && self?.connectedDevice == nil {
-                    self?.connectedDevice = deviceId
+                guard let self else { return }
+                // 建立 IP → deviceId 映射
+                self.deviceIPMap[senderIP] = deviceId
+                print("[SyncManager] UDP discovered \(deviceId) at \(senderIP)")
+
+                // 若已 TCP 连接但 connectedDevice 仍为 IP，用 deviceId 替换
+                if self.status == .connected, let currentDevice = self.connectedDevice {
+                    // 检查当前 connectedDevice 是否为 IP 地址（格式如 "192.168.x.x"）
+                    if currentDevice.contains(".") && self.deviceIPMap[currentDevice] != nil {
+                        self.connectedDevice = self.deviceIPMap[currentDevice]
+                        print("[SyncManager] Updated connectedDevice from IP to \(self.connectedDevice ?? currentDevice)")
+                    }
                 }
-                print("[SyncManager] UDP discovered \(deviceId), TCP status: \(self?.status.rawValue ?? "nil")")
             }
         }
 
         // TCP 客户端连接
         server.onClientConnected = { [weak self] remoteAddr in
             DispatchQueue.main.async {
-                self?.status = .connected
-                self?.connectedDevice = remoteAddr
-                self?.connectionMode = .lan
-                self?.initiateKeyExchangeIfNeeded()
+                guard let self else { return }
+                self.status = .connected
+                // 优先使用 UDP 发现的 deviceId，回退到 IP 地址
+                self.connectedDevice = self.deviceIPMap[remoteAddr] ?? remoteAddr
+                self.connectionMode = .lan
+                self.initiateKeyExchangeIfNeeded()
+                print("[SyncManager] TCP connected, device=\(self.connectedDevice ?? remoteAddr)")
             }
         }
 
@@ -242,17 +256,47 @@ class SyncManager: ObservableObject {
         }
     }
 
+    /// 用户是否配置了中继服务器（有配置文件 或 手动设置过host）
+    private var hasRelayConfig: Bool {
+        // 检查 ~/.clipboardsync/relay_config.json 是否存在
+        let configURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".clipboardsync")
+            .appendingPathComponent("relay_config.json")
+        let hasConfigFile = FileManager.default.fileExists(atPath: configURL.path)
+        // 检查用户是否手动设置过host（与默认值不同）
+        let hasCustomHost = RelayConfig.sharedDefaults.string(forKey: RelayConfig.hostDefaultsKey) != nil
+        return hasConfigFile || hasCustomHost
+    }
+
     private func startRelayIfNeeded() {
         let savedKey = RelayConfig.sharedDefaults.string(forKey: RelayConfig.roomKeyDefaultsKey) ?? ""
         let currentHost = RelayConfig.currentHost
-        print("[SyncManager] startRelay: savedKey=\(savedKey.isEmpty ? "(empty)" : savedKey) host=\(currentHost)")
-        if !savedKey.isEmpty {
-            roomKey = savedKey
-            wsClient.connect(to: RelayConfig.serverURL, roomKey: savedKey)
+        print("[SyncManager] startRelay: savedKey=\(savedKey.isEmpty ? "(empty)" : savedKey) host=\(currentHost) hasRelayConfig=\(hasRelayConfig)")
+
+        // Room Key 始终生成并持久化（TCP roomKeyInfo 交换需要）
+        if savedKey.isEmpty {
+            generateRoomKeyOnly()
         } else {
-            // 首次使用，生成 Room Key
-            generateAndSaveRoomKey()
+            roomKey = savedKey
         }
+
+        // 仅在有中继配置时才连接 WebSocket
+        guard hasRelayConfig else {
+            print("[SyncManager] No relay config found, skipping WebSocket connection (LAN-only mode)")
+            relayStatusText = "未配置中继服务器"
+            return
+        }
+
+        wsClient.connect(to: RelayConfig.serverURL, roomKey: roomKey)
+    }
+
+    /// 仅生成 Room Key 并持久化，不连接中继
+    private func generateRoomKeyOnly() {
+        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        let key = String((0..<RelayConfig.roomKeyLength).map { _ in chars.randomElement()! })
+        RelayConfig.sharedDefaults.set(key, forKey: RelayConfig.roomKeyDefaultsKey)
+        roomKey = key
+        print("[SyncManager] Room Key generated (LAN-only): \(key)")
     }
 
     private func generateAndSaveRoomKey() {

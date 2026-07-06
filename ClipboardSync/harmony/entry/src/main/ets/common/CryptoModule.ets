@@ -31,7 +31,7 @@ function bigIntToUint8Array(value: bigint, byteLength: number): Uint8Array {
 export class CryptoModule {
   private eccGenerator = cryptoFramework.createAsyKeyGenerator('ECC256')
   private eccKeyAgreement = cryptoFramework.createKeyAgreement('ECC256')
-  private kdf = cryptoFramework.createKdf('HKDF|SHA-256|HMAC')
+  private kdf = cryptoFramework.createKdf('HKDF|SHA256|EXTRACT_AND_EXPAND')
   private symKeyGenerator = cryptoFramework.createSymKeyGenerator('AES256')
 
   private privateKey: cryptoFramework.PriKey | null = null
@@ -156,17 +156,16 @@ export class CryptoModule {
       const encoder = new util.TextEncoder()
       const info = encoder.encode(infoStr)
 
-      const kdfSpec: cryptoFramework.KdfSpec = {
+      const hkdfSpec: cryptoFramework.HKDFSpec = {
         algName: 'HKDF',
-        hashAlgName: 'SHA-256',
-        hmacAlgName: 'HMAC',
-        keySize: 32,
-        salt: { data: new Uint8Array(0) }, // 无盐
-        info: { data: info },
+        key: new Uint8Array(sharedSecret.data),
+        salt: new Uint8Array(0),
+        info: info,
+        keySize: 32
       }
 
-      const derivedKeyData = await this.kdf.generateSecret(sharedSecret, kdfSpec)
-      this.derivedKey = await this.symKeyGenerator.convertKey({ data: derivedKeyData.data })
+      const derivedKeyData = await this.kdf.generateSecret(hkdfSpec)
+      this.derivedKey = await this.symKeyGenerator.convertKey(derivedKeyData)
       this._isEncryptionReady = true
 
       console.info('[CryptoModule] Session established, AES-256 key derived')
@@ -197,6 +196,7 @@ export class CryptoModule {
 
       // 加密
       const params: cryptoFramework.GcmParamsSpec = {
+        algName: 'GcmParamsSpec',
         iv: { data: nonce },
         aad: { data: aad },
         authTag: { data: new Uint8Array(16) }
@@ -252,6 +252,7 @@ export class CryptoModule {
       // 解密
       const cipher = cryptoFramework.createCipher('AES256|GCM|PKCS5')
       const params: cryptoFramework.GcmParamsSpec = {
+        algName: 'GcmParamsSpec',
         iv: { data: new Uint8Array(nonce) },
         aad: { data: aad },
         authTag: { data: new Uint8Array(tag) }
