@@ -13,10 +13,11 @@ If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is 
 
 当用户说"交班"、"下班"、"交接"、"handoff" 时，按以下流程执行：
 
-### 1. 提交代码（必须先做）
+### 1. 提交并推送代码（必须先做）
 - `git add -A` 暂存所有改动
-- `git commit -m "chore: 下班交接 — <日期>"` 提交
-- 所有改动必须纳入版本控制，不允许有未提交的代码留在工作树
+- `git commit -m "chore: 下班交接 — <日期>"` 提交（功能改动在交接前自行提交，此处提交的是交接文档和规则变更）
+- `git push` 推送到远端
+- 所有改动必须纳入版本控制并推送，不允许有未提交的代码留在工作树
 
 ### 2. 编写交接文档
 - 输出到 `.ai/HANDOFF.md`
