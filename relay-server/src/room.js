@@ -86,6 +86,8 @@ class Room {
    */
   relay(fromDeviceId, payload) {
     let count = 0
+    const msgType = payload?.type || '?'
+    console.log(`${config.logPrefix} [${this.roomKey}] ← \x1b[33mrelay\x1b[0m ${fromDeviceId} → ${msgType} (payload ${JSON.stringify(payload).length} bytes)`)
     for (const [deviceId, ws] of this.devices) {
       if (deviceId !== fromDeviceId) {
         this._send(ws, {
@@ -94,7 +96,11 @@ class Room {
           payload,
         })
         count++
+        console.log(`${config.logPrefix} [${this.roomKey}]   → forwarded to ${deviceId}`)
       }
+    }
+    if (count === 0) {
+      console.log(`${config.logPrefix} [${this.roomKey}]   → no other devices to forward to`)
     }
     return count
   }

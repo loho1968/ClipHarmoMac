@@ -3,7 +3,7 @@ import Foundation
 /// WebSocket 中继客户端
 /// 使用 URLSessionWebSocketTask (macOS 13+)
 /// 负责连接/认证/心跳/重连/消息收发
-class WSClient {
+class WSClient: NSObject, URLSessionWebSocketDelegate {
 
     // MARK: - 公开回调
 
@@ -22,6 +22,8 @@ class WSClient {
     private(set) var roomKey: String = ""
     private(set) var pairedDeviceId: String?
     private(set) var connectionMode: ConnectionMode = .disconnected
+    /// 是否正在自动重连（供外部 UI 判断状态提示）
+    var isRetrying: Bool { shouldReconnect && !isConnected && !isConnecting }
 
     enum ConnectionMode {
         case disconnected
@@ -33,7 +35,14 @@ class WSClient {
     // MARK: - 私有状态
 
     private var webSocketTask: URLSessionWebSocketTask?
-    private var urlSession: URLSession
+    private lazy var urlSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 300
+        // 绕过系统代理（Shadowrocket / Clash 等会剥离 WebSocket 的 Upgrade 头）
+        config.connectionProxyDictionary = [:]
+        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+    }()
     private var heartbeatTimer: Timer?
     private var reconnectAttempt: Int = 0
     private var reconnectTimer: Timer?
@@ -43,11 +52,8 @@ class WSClient {
 
     // MARK: - 初始化
 
-    init() {
-        let config = URLSessionConfiguration.ephemeral
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 300
-        self.urlSession = URLSession(configuration: config)
+    override init() {
+        super.init()
     }
 
     // MARK: - 公开方法
@@ -62,6 +68,22 @@ class WSClient {
         self.roomKey = roomKey
         self.shouldReconnect = true
         print("[WSClient]Connecting to \(url.absoluteString) with roomKey=\(roomKey)")
+        doConnect(url: url)
+    }
+
+    /// 强制重连（网络恢复后调用），重置重试计数器并立即连接
+    func forceReconnect() {
+        guard let url = targetURL, !roomKey.isEmpty else {
+            print("[WSClient] forceReconnect() skipped: missing url or roomKey")
+            return
+        }
+        print("[WSClient] forceReconnect() to \(url.absoluteString)")
+        cleanup()
+        webSocketTask?.cancel(with: .normalClosure, reason: nil)
+        webSocketTask = nil
+        isConnected = false
+        isConnecting = false
+        shouldReconnect = true
         doConnect(url: url)
     }
 
@@ -103,13 +125,37 @@ class WSClient {
     private func doConnect(url: URL) {
         isConnecting = true
         connectionMode = .connecting
-        webSocketTask = urlSession.webSocketTask(with: url)
+        // 显式设置 WebSocket 握手头，防止 URLSessionWebSocketTask 在某些
+        // macOS 版本（如 Darwin 25.x）上漏发 Upgrade/Connection 头
+        var request = URLRequest(url: url)
+        request.setValue("websocket", forHTTPHeaderField: "Upgrade")
+        request.setValue("Upgrade", forHTTPHeaderField: "Connection")
+        webSocketTask = urlSession.webSocketTask(with: request)
         webSocketTask?.resume()
+        // auth 在 urlSession(_:webSocketTask:didOpenWithProtocol:) 回调中发送
+        startReceiving()
+    }
 
-        // 连接后立即发送 auth 消息
+    // MARK: - URLSessionWebSocketDelegate
+
+    /// WebSocket 握手成功、连接打开后回调 —— 此时发送 auth 认证消息
+    func urlSession(_ session: URLSession,
+                    webSocketTask: URLSessionWebSocketTask,
+                    didOpenWithProtocol proto: String?) {
+        print("[WSClient] WebSocket opened, protocol: \(proto ?? "none"), sending auth...")
         let authMsg = RelayMessage.clientAuth(roomKey: roomKey, deviceId: ProtocolConst.deviceId)
         sendJSON(authMsg)
-        startReceiving()
+    }
+
+    /// WebSocket 关闭回调 —— 统一走 handleDisconnect 重连逻辑
+    func urlSession(_ session: URLSession,
+                    webSocketTask: URLSessionWebSocketTask,
+                    didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+                    reason: Data?) {
+        print("[WSClient] WebSocket closed: code=\(closeCode.rawValue)")
+        // 防止与 receive 回调中的 handleDisconnect 重复触发
+        guard isConnected || isConnecting else { return }
+        handleDisconnect(error: nil)
     }
 
     private func sendJSON(_ message: RelayMessage) {
@@ -222,6 +268,10 @@ class WSClient {
     }
 
     private func handleDisconnect(error: Error?) {
+        // 防止 didClose delegate 与 receive error 重复触发
+        guard isConnected || isConnecting else {
+            return
+        }
         print("[WSClient]Disconnected: \(error?.localizedDescription ?? "normal"), shouldReconnect=\(self.shouldReconnect)")
         isConnected = false
         isConnecting = false

@@ -131,6 +131,13 @@ class SyncManager: ObservableObject {
             self.discovery.start()
             print("[SyncManager] LAN services restarted")
         }
+
+        // 网络恢复后也强制重连中继（重置退避计数器、立即尝试）
+        if hasRelayConfig && !wsClient.isConnected {
+            print("[SyncManager] Network changed, force reconnecting relay...")
+            relayStatusText = "重连中..."
+            wsClient.forceReconnect()
+        }
     }
 
     private func setupCallbacks() {
@@ -221,7 +228,12 @@ class SyncManager: ObservableObject {
                     self.status = (self.server.connectedCount > 0) ? .connected : .discovering
                 }
                 self.relayPairedDeviceId = nil
-                self.relayStatusText = "中继已断开"
+                // 区分：用户主动断开 vs 意外断开重连中
+                if self.wsClient.isRetrying {
+                    self.relayStatusText = "中继重连中..."
+                } else {
+                    self.relayStatusText = "中继已断开"
+                }
             }
         }
 
@@ -394,13 +406,13 @@ class SyncManager: ObservableObject {
             return
         }
 
-        // 解密数据消息
+        // 解密数据消息（解密失败则回退到明文——兼容未加密的旧版设备）
         if CryptoModule.shouldEncrypt(messageType: msg.type) && crypto.isEncryptionReady {
             do {
                 msg.content = try crypto.decrypt(msg.content, deviceId: msg.deviceId, messageType: msg.type.rawValue)
             } catch {
-                print("[SyncManager] Decryption failed: \(error), dropping message")
-                return
+                print("[SyncManager] Decryption failed: \(error), treating as plaintext")
+                // 不 return，继续用原始 content（可能是对端未加密的明文）
             }
         }
 

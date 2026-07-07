@@ -1151,11 +1151,15 @@ export class SyncManager {
       deviceId: ProtocolConst.DEVICE_ID,
       mimeType: 'text/plain'
     }
-    // LAN 优先，中继后备
+    // WS 中继优先（跨网络可靠），TCP 仅作局域网加速
+    if (this.wsClient.connected) {
+      this.wsClient.sendRelay(msg)
+    }
     if (this.tcpClient.connected) {
       this.tcpClient.send(msg)
-    } else if (this.wsClient.connected) {
-      this.wsClient.sendRelay(msg)
+    }
+    if (!this.tcpClient.connected && !this.wsClient.connected) {
+      console.warn('[SyncManager] sendClipboardText: NO connection available, message dropped!')
     }
   }
 
@@ -1236,10 +1240,12 @@ export class SyncManager {
       }
     }
 
+    // WS 中继优先（跨网络可靠），TCP 仅作局域网加速
+    if (this.wsClient.connected) {
+      this.wsClient.sendRelay(msgToSend)
+    }
     if (this.tcpClient.connected) {
       this.tcpClient.send(msgToSend)
-    } else if (this.wsClient.connected) {
-      this.wsClient.sendRelay(msgToSend)
     }
   }
 
