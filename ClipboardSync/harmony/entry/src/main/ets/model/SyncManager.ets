@@ -934,6 +934,9 @@ export class SyncManager {
         this._cachedClipboardText = text
         this.sendClipboardText(text)
         this.addRecord(text, 'sent')
+      } else {
+        // 剪贴板无变化，清除脏标记
+        this._clipboardDirty = false
       }
     }).catch((err: Error) => {
       console.error('[SyncManager] readClipboard error: ' + err.message)
@@ -967,6 +970,9 @@ export class SyncManager {
         this._clipboardDirty = true
       }
     } catch (_e) { /* silent */ }
+
+    // 记录本次前台恢复时是否检测到本地变化
+    const hadLocalChange = this._clipboardDirty
     this.onClipboardChanged()
 
     if (this.pendingFiles.length > 0) {
@@ -976,9 +982,15 @@ export class SyncManager {
       }
     }
 
-    setTimeout(() => {
-      this.addImmediatePoll()
-    }, 1500)
+    // 只有本地无变化时才拉取 Mac 剪贴板，防止 Mac 旧内容覆盖刚推送的本地内容
+    // 等 Mac 确认收到并自身剪贴板更新后，下次 poll 自然是最新的
+    if (!hadLocalChange) {
+      setTimeout(() => {
+        this.addImmediatePoll()
+      }, 1500)
+    } else {
+      console.info('[SyncManager] onAppForeground: skipping poll (just pushed local clipboard)')
+    }
   }
 
   private addImmediatePoll(): void {
@@ -1054,6 +1066,18 @@ export class SyncManager {
         return
       }
 
+      // 后台检测本地剪贴板变化（推送到 Mac）
+      if (!this.isRemoteUpdate) {
+        try {
+          const cc = this.systemPasteboard.getChangeCount()
+          if (cc !== this.lastChangeCount) {
+            this.lastChangeCount = cc
+            console.info('[SyncManager] backgroundPoll: local clipboard changed')
+            this.onClipboardChanged()
+          }
+        } catch (_e) { /* silent */ }
+      }
+
       this.pollTickCount++
       // 30s / 5s = 6 ticks
       if (this.pollTickCount >= 6) {
@@ -1067,7 +1091,7 @@ export class SyncManager {
         }
       }
     }, 5000) as number
-    console.info('[SyncManager] backgroundPoll started (5s check, 30s poll, screen-gated)')
+    console.info('[SyncManager] backgroundPoll started (5s check, 30s poll, screen-gated, local-clipboard-detect)')
   }
 
   private stopBackgroundPoll(): void {
@@ -1100,6 +1124,13 @@ export class SyncManager {
    */
   manualSendText(text: string): void {
     if (text.length === 0) {
+      return
+    }
+    if (!this.tcpClient.connected && !this.wsClient.connected) {
+      // 未连接时缓存文本，连接建立后由 flushPendingClipboard() 自动发送
+      console.info('[SyncManager] manualSendText: not connected, caching for later: len=' + text.length)
+      this._cachedClipboardText = text
+      this._clipboardDirty = true
       return
     }
     this.sendClipboardText(text)
