@@ -724,8 +724,8 @@ export class SyncManager {
           fileCount: msg.fileCount
         }
       } catch (e) {
-        console.error('[SyncManager] Decryption failed: ' + JSON.stringify(e))
-        return // 丢弃无法解密的消息
+        console.error('[SyncManager] Decryption failed: ' + JSON.stringify(e) + ', treating as plaintext')
+        // 不 return，继续用原始 decryptedMsg（兼容未加密的对端）
       }
     }
 
