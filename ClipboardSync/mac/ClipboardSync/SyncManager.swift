@@ -43,9 +43,8 @@ class SyncManager: ObservableObject {
     private let wsClient = WSClient()
     private let networkMonitor = NetworkMonitor()
 
-    // 端到端加密
+    // 端到端加密（配对码派生密钥，无需 ECDH 握手）
     private let crypto = CryptoModule()
-    private var hasSentKeyExchange = false
 
     // 去重：记录最近发送的消息时间戳，避免回环
     private var lastSentTimestamp: Double = 0
@@ -104,7 +103,6 @@ class SyncManager: ObservableObject {
         connectionMode = .none
         connectedDevice = nil
         relayPairedDeviceId = nil
-        hasSentKeyExchange = false
     }
 
     // MARK: - 网络感知
@@ -168,7 +166,6 @@ class SyncManager: ObservableObject {
                 // 优先使用 UDP 发现的 deviceId，回退到 IP 地址
                 self.connectedDevice = self.deviceIPMap[remoteAddr] ?? remoteAddr
                 self.connectionMode = .lan
-                self.initiateKeyExchangeIfNeeded()
                 print("[SyncManager] TCP connected, device=\(self.connectedDevice ?? remoteAddr)")
             }
         }
@@ -250,7 +247,6 @@ class SyncManager: ObservableObject {
                     self.connectionMode = .relay
                     self.status = .connected
                 }
-                self.initiateKeyExchangeIfNeeded()
             }
         }
 
@@ -291,6 +287,9 @@ class SyncManager: ObservableObject {
         } else {
             roomKey = savedKey
         }
+
+        // 从配对码派生 AES 加密密钥（两端相同 roomKey → 相同密钥）
+        crypto.deriveKeyFromRoomKey(roomKey)
 
         // 仅在有中继配置时才连接 WebSocket
         guard hasRelayConfig else {
@@ -340,7 +339,6 @@ class SyncManager: ObservableObject {
         wsClient.disconnect()
         relayPairedDeviceId = nil
         crypto.clearSession()
-        hasSentKeyExchange = false
         let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         let key = String((0..<RelayConfig.roomKeyLength).map { _ in chars.randomElement()! })
         RelayConfig.sharedDefaults.set(key, forKey: RelayConfig.roomKeyDefaultsKey)
@@ -400,9 +398,8 @@ class SyncManager: ObservableObject {
     private func handleRemoteMessage(_ msg: SyncMessage) {
         var msg = msg
 
-        // 密钥交换（必须在解密之前处理）
+        // 密钥交换（新架构不再使用，保留兼容旧对端）
         if msg.type == .keyExchange {
-            handleKeyExchange(msg)
             return
         }
 
@@ -482,8 +479,7 @@ class SyncManager: ObservableObject {
             // Mac 端忽略（仅发送 roomKeyInfo 给手机，不接收）
             break
         case .keyExchange:
-            // 已在方法入口处理，此处仅满足 switch 完整
-            break
+            break // 新架构不再使用，保留兼容
         }
 
         DispatchQueue.main.async {
@@ -661,55 +657,6 @@ class SyncManager: ObservableObject {
             server.broadcast(msg)
         } else if wsClient.isConnected {
             wsClient.sendRelay(msg)
-        }
-    }
-
-    // MARK: - 密钥交换
-
-    private func initiateKeyExchangeIfNeeded() {
-        guard !hasSentKeyExchange else { return }
-        sendKeyExchange()
-    }
-
-    private func sendKeyExchange() {
-        let msg = SyncMessage(
-            type: .keyExchange,
-            content: "",
-            timestamp: Date().timeIntervalSince1970,
-            deviceId: ProtocolConst.deviceId,
-            mimeType: nil,
-            networkSSID: nil,
-            publicKey: crypto.publicKeyBase64
-        )
-        // 密钥交换消息不经过加密处理，直接发送
-        if server.connectedCount > 0 {
-            server.broadcast(msg)
-        } else if wsClient.isConnected {
-            wsClient.sendRelay(msg)
-        }
-        hasSentKeyExchange = true
-        print("[SyncManager] Sent keyExchange, pk=\(crypto.publicKeyBase64.prefix(16))...")
-    }
-
-    private func handleKeyExchange(_ msg: SyncMessage) {
-        guard let publicKeyBase64 = msg.publicKey, !publicKeyBase64.isEmpty else {
-            print("[SyncManager] keyExchange received without publicKey")
-            return
-        }
-
-        print("[SyncManager] Received keyExchange from \(msg.deviceId)")
-
-        do {
-            try crypto.establishSession(peerPublicKeyBase64: publicKeyBase64)
-
-            // 如果本端还未发送公钥，回复之
-            if !hasSentKeyExchange {
-                sendKeyExchange()
-            }
-
-            print("[SyncManager] Key exchange complete, encryption active")
-        } catch {
-            print("[SyncManager] Key exchange failed: \(error)")
         }
     }
 

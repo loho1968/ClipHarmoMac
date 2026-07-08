@@ -80,7 +80,6 @@ export class SyncManager {
   private wsClient: WSClient = new WSClient()
   private networkCtx: NetworkContextManager = new NetworkContextManager()
   private crypto: CryptoModule = new CryptoModule()
-  private hasSentKeyExchange: boolean = false
   private systemPasteboard: pasteboard.SystemPasteboard = pasteboard.getSystemPasteboard()
   private pollTimerId: number = -1
   private isRemoteUpdate: boolean = false
@@ -217,10 +216,7 @@ export class SyncManager {
     // 启动剪贴板监听
     this.startClipboardListener()
 
-    // 初始化加密模块
-    this.initCrypto()
-
-    // 初始化中继连接
+    // 初始化中继连接（内部会根据 roomKey 派生加密密钥）
     this.initRelay()
 
     // 启动分片超时清理
@@ -244,7 +240,6 @@ export class SyncManager {
     this._connectionMode = ConnectionMode.NONE
     this._connectedDevice = ''
     this._relayPairedDeviceId = ''
-    this.hasSentKeyExchange = false
     this.onStateChange?.()
   }
 
@@ -300,7 +295,6 @@ export class SyncManager {
       this._status = SyncStatus.CONNECTED
       this._connectedDevice = ip
       this._connectionMode = ConnectionMode.LAN
-      this.initiateKeyExchangeIfNeeded()
       this.onStateChange?.()
 
       // 检查是否需要提示用户记住此网络
@@ -490,7 +484,6 @@ export class SyncManager {
         this._connectionMode = ConnectionMode.RELAY
         this._status = SyncStatus.CONNECTED
       }
-      this.initiateKeyExchangeIfNeeded()
       this.onStateChange?.()
 
       setTimeout(() => {
@@ -513,70 +506,8 @@ export class SyncManager {
 
   // ============ 加密模块初始化 ============
 
-  private async initCrypto(): Promise<void> {
-    try {
-      if (!this.relayPrefs) {
-        const ctx = this._context
-        if (!ctx) {
-          return
-        }
-        this.relayPrefs = preferences.getPreferencesSync(ctx, { name: 'clipboardsync_relay' })
-      }
-      await this.crypto.initialize(this.relayPrefs)
-      console.info('[SyncManager] Crypto module initialized, ready=' + this.crypto.isEncryptionReady)
-    } catch (e) {
-      console.error('[SyncManager] Crypto init failed: ' + JSON.stringify(e))
-    }
-  }
-
-  private initiateKeyExchangeIfNeeded(): void {
-    if (this.hasSentKeyExchange) {
-      return
-    }
-    this.sendKeyExchange()
-  }
-
-  private sendKeyExchange(): void {
-    const msg: SyncMessage = {
-      type: MessageType.KEY_EXCHANGE,
-      content: '',
-      timestamp: Date.now() / 1000,
-      deviceId: ProtocolConst.DEVICE_ID,
-      publicKey: this.crypto.publicKeyBase64
-    }
-    // 密钥交换消息不加密，直接发送
-    if (this.tcpClient.connected) {
-      this.tcpClient.send(msg)
-    } else if (this.wsClient.connected) {
-      this.wsClient.sendRelay(msg)
-    }
-    this.hasSentKeyExchange = true
-    console.info('[SyncManager] Sent keyExchange, pk=' +
-      this.crypto.publicKeyBase64.substring(0, 16) + '...')
-  }
-
-  private async handleKeyExchange(msg: SyncMessage): Promise<void> {
-    const publicKeyBase64 = msg.publicKey || ''
-    if (publicKeyBase64.length === 0) {
-      console.info('[SyncManager] keyExchange received without publicKey')
-      return
-    }
-
-    console.info('[SyncManager] Received keyExchange from ' + msg.deviceId)
-
-    await this.crypto.establishSession(publicKeyBase64)
-
-    if (this.crypto.isEncryptionReady && this.relayPrefs) {
-      this.crypto.savePeerPublicKey(this.relayPrefs, publicKeyBase64)
-
-      // 如果本端还未发送公钥，回复之
-      if (!this.hasSentKeyExchange) {
-        this.sendKeyExchange()
-      }
-
-      console.info('[SyncManager] Key exchange complete, encryption active')
-    }
-  }
+  // 新架构：配对码派生密钥，不再需要 ECDH 握手
+  // crypto.deriveKeyFromRoomKey() 在 setRoomKey() 中调用
 
   // ============ 中继连接 ============
 
@@ -607,6 +538,8 @@ export class SyncManager {
     console.info('[SyncManager] initRelay: savedKey=' + (savedKey.length > 0 ? savedKey : '(empty)'))
     if (savedKey.length > 0) {
       this._roomKey = savedKey
+      // 从配对码派生 AES 加密密钥
+      void this.crypto.deriveKeyFromRoomKey(savedKey)
       const url = RelayConfig.buildURL(this._relayServerHost)
       console.info('[SyncManager] initRelay: connecting to ' + url)
       this.wsClient.connect(url, savedKey)
@@ -630,6 +563,8 @@ export class SyncManager {
       this.relayPrefs.putSync(RelayConfig.ROOM_KEY_STORAGE_KEY, roomKey)
       this.relayPrefs.flush()
     }
+    // 从配对码派生 AES 加密密钥（两端相同 roomKey → 相同密钥）
+    void this.crypto.deriveKeyFromRoomKey(roomKey)
     // 先断开旧连接（如果有），再用新 key 连接
     this.wsClient.disconnect()
     const url = RelayConfig.buildURL(this._relayServerHost)
@@ -673,12 +608,11 @@ export class SyncManager {
     if (this.relayPrefs) {
       this.relayPrefs.putSync(RelayConfig.ROOM_KEY_STORAGE_KEY, '')
       this.relayPrefs.flush()
-      this.crypto.clearSession(this.relayPrefs)
+      this.crypto.clearSession()
     }
     this.wsClient.disconnect()
     this._relayPairedDeviceId = ''
     this._relayStatusText = ''
-    this.hasSentKeyExchange = false
     this.onStateChange?.()
   }
 
@@ -688,9 +622,8 @@ export class SyncManager {
     console.info('[SyncManager] ←←← handleRemoteMessage: type=' + msg.type + ' contentLen=' + msg.content.length)
     let decryptedMsg = msg
 
-    // 密钥交换（必须在解密之前处理）
+    // 密钥交换（新架构不再使用，保留兼容旧对端）
     if (msg.type === MessageType.KEY_EXCHANGE) {
-      await this.handleKeyExchange(msg)
       return
     }
 
@@ -800,6 +733,8 @@ export class SyncManager {
       console.info('[SyncManager] First-time auto-set relay roomKey from Mac: ' + roomKey)
       this._roomKey = roomKey
       this._relayServerHost = relayHost
+      // 从配对码派生 AES 加密密钥
+      void this.crypto.deriveKeyFromRoomKey(roomKey)
       if (this.relayPrefs) {
         this.relayPrefs.putSync(RelayConfig.ROOM_KEY_STORAGE_KEY, roomKey)
         this.relayPrefs.putSync(RelayConfig.HOST_STORAGE_KEY, relayHost)
@@ -1253,7 +1188,8 @@ export class SyncManager {
    * 判断某类消息是否需要加密
    */
   private shouldEncryptType(type: MessageType): boolean {
-    if (type === MessageType.CLIPBOARD_IMAGE ||
+    if (type === MessageType.CLIPBOARD_TEXT ||
+        type === MessageType.CLIPBOARD_IMAGE ||
         type === MessageType.CLIPBOARD_FILE ||
         type === MessageType.CLIPBOARD_DATA_CHUNK) {
       return true
