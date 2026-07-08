@@ -1253,8 +1253,7 @@ export class SyncManager {
    * 判断某类消息是否需要加密
    */
   private shouldEncryptType(type: MessageType): boolean {
-    if (type === MessageType.CLIPBOARD_TEXT ||
-        type === MessageType.CLIPBOARD_IMAGE ||
+    if (type === MessageType.CLIPBOARD_IMAGE ||
         type === MessageType.CLIPBOARD_FILE ||
         type === MessageType.CLIPBOARD_DATA_CHUNK) {
       return true

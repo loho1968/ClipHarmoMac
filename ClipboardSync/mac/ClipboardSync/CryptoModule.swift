@@ -185,10 +185,10 @@ final class CryptoModule {
     /// 判断某类消息的 content 是否需要加密
     static func shouldEncrypt(messageType: MessageType) -> Bool {
         switch messageType {
-        case .clipboardText, .clipboardImage, .clipboardFile,
+        case .clipboardImage, .clipboardFile,
              .clipboardDataChunk, .verificationCode:
             return true
-        case .ping, .pong, .keyExchange, .roomKeyInfo, .clipboardPoll:
+        case .clipboardText, .ping, .pong, .keyExchange, .roomKeyInfo, .clipboardPoll:
             return false
         }
     }
