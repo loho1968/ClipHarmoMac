@@ -4,6 +4,8 @@
 * Use the most modern macOS APIs. Since there is no backward compatibility constraint, this app can target the latest macOS version with the newest APIs.
 * Use the most modern Swift language features and conventions. Target Swift 6 and use Swift concurrency (async/await, actors) and Swift macros where applicable.
 * 全部用中文回答。
+* **代码探索优先使用 codegraph**：在阅读或修改代码前，优先使用 `mcp__codegraph__codegraph_explore`（Swift）或 `mcp__codegraph-arkts__codegraph_explore`（ArkTS）搜索代码结构、符号定义和调用关系。避免直接 Read 文件，codegraph 返回的是精确行号源码。
+* **修改代码后同步索引**：每次完成代码修改后执行 `codegraph sync`；若报告 "not initialized"，则执行 `codegraph init` 后再 `codegraph sync`。
 * Swift 项目修改完成后，使用 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --package-path /Users/loho/Developer/ClipHarmoMac/ClipboardSync/mac` 进行编译，然后修复所有编译错误。
 * HarmonyOS (ArkTS) 项目位于 `ClipboardSync/harmony/`。已配置 `deveco-cli` 工具链：
   - 编译：`devecocli build --project-path ClipboardSync/harmony`
