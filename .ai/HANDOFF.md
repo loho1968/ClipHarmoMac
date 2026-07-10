@@ -1,112 +1,60 @@
-# 工作交接 — 2026-07-07
+# 工作交接 — 2026-07-10
 
 ## 机器信息
 - **主机名**: `loho.local`
 - **分支**: `main`
-- **最近提交**:
-  - `4730423` — chore: 下班交接（本机）
-  - `46bdb64` — tool: 集成 deveco-cli
-  - `fcdbceb` — fix: Mac重启后中继断连 & 手机→Mac单向不通
-  - `26b2e85` — feat: P1体验优化三连 + 鸿蒙后台重连 + SDK适配 + 文档完善
-  - `deea982` — 自动连接（端到端加密）
+- **最近提交**: `7319809` — fix: 保存目录选择器修复 + 剪贴板回环修复 + 后台轮询提速
 - **工作树**: 干净 ✅
 
-## 本次同步（git pull 合并了两台机器的提交）
+## 今日完成
 
-### A 线（远程机器 — 7/6 会话）
+### 1. 保存目录选择器修复
+- [x] `Index.ets` 中 `selectSaveDirectory()` 和 `pickDirectoryAndSave()` 从 `DocumentSelectOptions`（文件选择器）改为 `DocumentSaveOptions + save()`（保存位置选择器）
+- [x] 返回 URI 中提取父目录路径，而不是直接把文件 URI 当目录用
+- [x] 尝试过"直接保存到系统相册"方案（`photoAccessHelper.createAsset()`），因需要 `WRITE_IMAGEVIDEO` 权限而放弃并回退
 
-#### 1. 功能确认 & 文档
-- 功能确认分析（29 项全部已实现）→ `开发计划/功能确认.md`
-- 改进计划（3 P1 + 2 P2 + 3 P3）→ `开发计划/改进计划.md`
-- 测试计划（8 类 50+ 条用例）→ `开发计划/剪贴板同步测试.md`
-- README.md 大幅完善（功能表 + FAQ + 完整文件清单）
-- `.mcp.json` 配置 codegraph + codegraph-arkts
+### 2. 剪贴板回环修复
+- [x] 根因：手机 `writeClipboardText/writeClipboardImage` 写入剪贴板后，`update` 事件**异步**触发时 `isRemoteUpdate` 早已重置为 `false`，导致手机回传内容给 Mac
+- [x] `update` 事件处理器增加 `changeCount` 二次校验（`currentCount === lastChangeCount` → 跳过）
+- [x] `savePendingFile` 写文件 URI 到剪贴板后，补充 `lastChangeCount`/`_cachedClipboardText` 同步
+- [x] `onAppForeground` 增加 `isFirstLaunch` 判断，首次启动清除陈旧缓存
 
-#### 2. P1 三连修复
-- **P1-1: 显示设备名而非 IP** — `DiscoveryService.onDeviceFound` + `senderIP`，`SyncManager` 构建 IP→设备名映射
-- **P1-2: 纯局域网不连中继** — `hasRelayConfig` 判断，无配置时跳过 WebSocket，避免误报
-- **P1-3: 多网卡广播** — 枚举所有活跃接口，每接口独立 socket bind 后发送，解决「Mac 有线+手机 WiFi」跨子网问题
+### 3. 后台轮询提速 + 诊断日志
+- [x] 轮询间隔 5s → 2s（熄屏唤醒后最快 2 秒内触发重连）
+- [x] 熄屏时每 60s 打心跳日志（`⬛ still screen-off`），确认 Timer 未被冻结
+- [x] 亮屏时打印熄屏时长和连接状态（`☀️ screen WOKE UP (off ~Xs) tcp=F ws=F`）
+- [x] `EntryAbility` 生命周期加时间戳（`▶️ onForeground` / `⏸️ onBackground`）
+- [x] 新增 `onScreenWakeup()` 公开入口（供后续系统事件接入）
 
-#### 3. 鸿蒙端后台/重连改进
-- EntryAbility 移除后台启动的前置连接条件
-- SyncManager: `ensureConnectionOnWakeup()` 主动重连（TCP→WS fallback），`addImmediatePoll()`
-- WSClient: 新增 `forceReconnect(url, roomKey)`
+### 4. 系统事件订阅尝试（已放弃）
+- [x] 尝试 `power.on('screenOn')` → SDK 中无此 API
+- [x] 尝试 `commonEventManager` 订阅 `usual.event.SCREEN_ON` → `CommonEventSubscribeInfo` 等类型在 `@kit.BasicServicesKit` 中未导出
+- [x] 结论：HarmonyOS 普通应用只能依赖 `power.isActive()` 轮询，无法订阅系统级亮屏事件
 
-#### 4. 鸿蒙端 SDK 适配
-- CryptoModule.ets: KDF API → `HKDFSpec` + `EXTRACT_AND_EXPAND`（API 12+），GCM 参数增加 `algName`
-
-#### 5. Bug 修复（后续提交）
-- **Mac 重启后中继断连** & **手机→Mac 单向不通**（六合一修复，`fcdbceb`）
-- **手机端剪贴板同步三个缺陷**（`fc8c9eb`）
-
-#### 6. DevEco CLI 集成
-- CLAUDE.md 增加 devecocli 命令参考
-- 安装 Skill: `.claude-code/skills/deveco-cli/SKILL.md`
-- 鸿蒙端 `.mcp.json` 配置
-
-### B 线（本机 — 7/5 会话）
-
-#### 端到端加密（ECDH + AES-256-GCM）
-- Mac 端 `CryptoModule.swift`（249 行）：ECDH P-256 + AES-256-GCM，私钥存 Keychain
-- 鸿蒙端 `CryptoModule.ets`（309 行）：线格式与 Mac 完全一致
-- 自动密钥交换：连接建立后自动发送 `keyExchange`
-- 透明加解密：SyncManager 收发 pipeline 自动处理
-- AAD 绑定 `deviceId|messageType` 防重放
-- 协议扩展：`keyExchange` 类型 + `publicKey` 字段
-
-## 全部文件变更（自 7/4 以来累计）
+## 文件变更清单
 
 | 文件 | 变更说明 |
 |------|---------|
-| `ClipboardSync/mac/ClipboardSync/DiscoveryService.swift` | 多网卡广播重构 |
-| `ClipboardSync/mac/ClipboardSync/SyncManager.swift` | P1 三连 + 加密 pipeline + 中继断连修复 |
-| `ClipboardSync/mac/ClipboardSync/CryptoModule.swift` | **新增**：ECDH + AES-256-GCM |
-| `ClipboardSync/mac/ClipboardSync/Protocol.swift` | 新增 `keyExchange` / `publicKey` |
-| `ClipboardSync/harmony/.../CryptoModule.ets` | **新增** + SDK 适配（API 12+） |
-| `ClipboardSync/harmony/.../SyncManager.ets` | 后台重连 + 加密 pipeline + bug 修复 |
-| `ClipboardSync/harmony/.../TCPClient.ets` | 诊断日志 |
-| `ClipboardSync/harmony/.../WSClient.ets` | `forceReconnect()` |
-| `ClipboardSync/harmony/.../EntryAbility.ets` | 后台启动去条件化 |
-| `ClipboardSync/harmony/.../Protocol.ets` | `KEY_EXCHANGE` + `publicKey` |
-| `README.md` | 功能表 + FAQ + 文件清单 |
-| `CLAUDE.md` | deveco-cli 集成 |
-| `.mcp.json` | codegraph / codegraph-arkts / deveco-mcp |
-| `.claude-code/skills/deveco-cli/SKILL.md` | **新增**：deveco-cli skill |
-| `开发计划/*.md` | **新增**：功能确认 + 改进计划 + 测试计划 |
+| `ClipboardSync/harmony/.../pages/Index.ets` | `selectSaveDirectory` + `pickDirectoryAndSave` 改用 `DocumentSaveOptions` |
+| `ClipboardSync/harmony/.../model/SyncManager.ets` | 剪贴板回环修复 + 后台轮询提速 + 诊断日志 + `onScreenWakeup()` |
+| `ClipboardSync/harmony/.../entryability/EntryAbility.ets` | `onForeground`/`onBackground` 时间戳日志 |
 
 ## 编译状态
-✅ **Mac 端编译通过**（仅预存 NSUserNotification 弃用警告）
-⚠️ 鸿蒙端需 DevEco Studio 验证（CryptoModule API 兼容性 + 多文件改动）
-
-## 整体进度
-
-### 已完成 ✅
-- 文本/图片/文件剪贴板同步
-- UDP 多网卡广播 + TCP 直连 + WebSocket 中继
-- LAN/中继自动切换、二维码配对
-- 短信验证码提取、开机自启、同步历史、菜单栏状态图标
-- 图片/文件暂存待发
-- TCP 连接看门狗
-- 鸿蒙端文件分享 + 后台轮询 + 熄屏重连
-- Mac 端显示设备名（非 IP）
-- 纯局域网自动跳过中继
-- **端到端 AES-256-GCM 加密**
-- Bug 修复：中继断连 / 手机→Mac 单向不通 / 手机端同步缺陷
-- DevEco CLI 集成
-
-### 待完成（优先级排序）
-1. **P0**: 鸿蒙端编译验证 + 真机测试全流程
-2. **P1**: 中继通道图片/文件分片发送（目前仅 TCP 支持）
-3. **P2**: TCP 应用层心跳 + 消息序列号
-4. **P2**: 多设备同时连接
-5. **P3**: 单元测试
+⚠️ 鸿蒙端未编译验证（本会话仅做 ArkTS 代码修改，无 DevEco Studio 环境）
 
 ## 工作断点
-- **正在做**: 大集成后的稳定阶段，编译验证 + 真机测试
-- **卡在哪里**: 无阻塞
-- **下一步**: 鸿蒙端编译 → 真机测试加密 + 多网卡广播 + 后台重连
+- **正在做**: 等待用户用日志诊断后台 Timer 是否在深度熄屏后仍运行
+- **诊断方法**: DevEco Studio → Log 面板 → 过滤 `bgPoll` → 看 `☀️`（亮屏）是否早于 `▶️`（打开 App）
+- **下一步**: 
+  - 如果 `☀️` 早于 `▶️` → 后台轮询有效，结案
+  - 如果 `☀️` 和 `▶️` 同时出现 → 深度熄屏后 Timer 被冻结，需另寻方案
+
+## 关键决策
+1. **放弃相册保存**：`photoAccessHelper.createAsset()` 需要 `WRITE_IMAGEVIDEO` 权限，用户觉得麻烦，回退到文件系统目录选择方案
+2. **放弃系统事件订阅**：`power.on` 不存在，`commonEventManager` 类型不完整，最可靠的方案仍是 `power.isActive()` 轮询
+3. **changeCount 二次校验**：用 pasteboard 的 change count 作为远程写入的可靠标记，比单纯的 `isRemoteUpdate` 布尔标志更可靠
 
 ## 待清理
-- [x] 无 stash
-- [x] 代码已全部提交
-- [ ] 鸿蒙端编译 + 真机测试
+- [x] 代码已提交推送
+- [ ] 鸿蒙端编译验证
+- [ ] 真机测试：熄屏 30 分钟 → 亮屏 → 观察日志确认后台重连是否触发
