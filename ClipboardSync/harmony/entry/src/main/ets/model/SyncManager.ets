@@ -796,7 +796,15 @@ export class SyncManager {
         if (this.isRemoteUpdate) {
           return
         }
+        // isRemoteUpdate 在同步代码结束后就重置了，但 update 事件是异步触发的，
+        // 此时 isRemoteUpdate 可能已经是 false。用 changeCount 二次校验：
+        // 如果与 lastChangeCount 一致，说明变化是我们自己写入的，忽略
+        const currentCount = this.systemPasteboard.getChangeCount()
+        if (currentCount === this.lastChangeCount) {
+          return
+        }
         console.info('[SyncManager] Clipboard update event fired')
+        this.lastChangeCount = currentCount
         this._clipboardDirty = true
         this.onClipboardChanged()
       })
@@ -898,17 +906,30 @@ export class SyncManager {
    */
   onAppForeground(): void {
     console.info('[SyncManager] onAppForeground: dirty=' + this._clipboardDirty + ' cachedLen=' + this._cachedClipboardText.length)
+    const isFirstLaunch = this.lastChangeCount < 0
     try {
       const changeCount = this.systemPasteboard.getChangeCount()
       if (changeCount !== this.lastChangeCount) {
         this.lastChangeCount = changeCount
-        this._clipboardDirty = true
+        if (!isFirstLaunch) {
+          this._clipboardDirty = true
+        }
       }
     } catch (_e) { /* silent */ }
 
+    // 首次启动时清除陈旧缓存（进程被系统杀死后重启的场景），
+    // 不推送本地剪贴板到 Mac，避免用陈旧内容覆盖 Mac 端剪贴板
+    if (isFirstLaunch) {
+      console.info('[SyncManager] onAppForeground: first launch, clearing stale cache')
+      this._cachedClipboardText = ''
+      this._clipboardDirty = false
+    }
+
     // 记录本次前台恢复时是否检测到本地变化
     const hadLocalChange = this._clipboardDirty
-    this.onClipboardChanged()
+    if (!isFirstLaunch) {
+      this.onClipboardChanged()
+    }
 
     if (this.pendingFiles.length > 0) {
       console.info('[SyncManager] onAppForeground: flushing ' + this.pendingFiles.length + ' pending files')
@@ -977,10 +998,29 @@ export class SyncManager {
     console.info('[SyncManager] requestRemoteClipboard: sent CLIPBOARD_POLL')
   }
 
+  // ============ 后台亮屏检测 + 定时拉取 ============
+
+  /**
+   * 屏幕亮起时主动触发重连（供外部事件监听器调用）
+   * 作为后台 2s 轮询的补充，可在有系统事件可用时接入
+   */
+  onScreenWakeup(): void {
+    console.info('[SyncManager] onScreenWakeup: screen turned on, reconnecting')
+    void this.ensureConnectionOnWakeup()
+  }
+
+  // 后台轮询的熄屏计数（用于日志诊断）
+  private screenOffTickCount: number = 0
+
   private startBackgroundPoll(): void {
     this.stopBackgroundPoll()
     this.screenWasOff = false
     this.pollTickCount = 0
+    this.screenOffTickCount = 0
+    // 间隔 2 秒：熄屏唤醒后最快 2 秒内触发重连
+    const bgPollInterval: number = 2000
+    // 30s / 2s = 15 ticks 触发一次定时拉取
+    const bgPollTicks: number = 15
     this.backgroundPollTimerId = setInterval(() => {
       let active: boolean = false
       try {
@@ -988,15 +1028,33 @@ export class SyncManager {
       } catch (_e) { /* ignore */ }
 
       if (!active) {
-        this.screenWasOff = true
+        if (!this.screenWasOff) {
+          this.screenWasOff = true
+          this.screenOffTickCount = 1
+          console.info('[SyncManager] ⬛ bgPoll: screen OFF at ' + new Date().toLocaleTimeString())
+        } else {
+          this.screenOffTickCount++
+          // 每 60s (30 ticks) 打一次心跳，确认 Timer 仍在运行
+          if (this.screenOffTickCount % 30 === 0) {
+            console.info('[SyncManager] ⬛ bgPoll: still screen-off, tick=' +
+              this.screenOffTickCount + ' (~' + (this.screenOffTickCount * 2) + 's)')
+          }
+        }
         return
       }
 
-      // 亮屏时：强制重连，重连成功后回调中会自动 POLL
+      // 亮屏时：强制重连
       if (this.screenWasOff) {
+        const offDuration: number = this.screenOffTickCount * 2
         this.screenWasOff = false
+        this.screenOffTickCount = 0
         this.pollTickCount = 0
-        console.info('[SyncManager] backgroundPoll: screen just woke up, reconnecting')
+        const tcpOk: boolean = this.tcpClient.connected
+        const wsOk: boolean = this.wsClient.connected
+        console.info('[SyncManager] ☀️ bgPoll: screen WOKE UP at ' +
+          new Date().toLocaleTimeString() +
+          ' (off ~' + offDuration + 's)' +
+          ' tcp=' + tcpOk + ' ws=' + wsOk)
         void this.ensureConnectionOnWakeup()
         return
       }
@@ -1007,26 +1065,27 @@ export class SyncManager {
           const cc = this.systemPasteboard.getChangeCount()
           if (cc !== this.lastChangeCount) {
             this.lastChangeCount = cc
-            console.info('[SyncManager] backgroundPoll: local clipboard changed')
+            console.info('[SyncManager] bgPoll: local clipboard changed')
             this.onClipboardChanged()
           }
         } catch (_e) { /* silent */ }
       }
 
       this.pollTickCount++
-      // 30s / 5s = 6 ticks
-      if (this.pollTickCount >= 6) {
+      if (this.pollTickCount >= bgPollTicks) {
         this.pollTickCount = 0
-        if (this.tcpClient.connected || this.wsClient.connected) {
-          console.info('[SyncManager] backgroundPoll: periodic poll (30s)')
+        const tcpOk: boolean = this.tcpClient.connected
+        const wsOk: boolean = this.wsClient.connected
+        if (tcpOk || wsOk) {
+          console.info('[SyncManager] bgPoll: periodic poll (30s) tcp=' + tcpOk + ' ws=' + wsOk)
           this.requestRemoteClipboard()
         } else {
-          console.info('[SyncManager] backgroundPoll: not connected, reconnecting')
+          console.info('[SyncManager] bgPoll: disconnected, reconnecting tcp=' + tcpOk + ' ws=' + wsOk)
           void this.ensureConnectionOnWakeup()
         }
       }
-    }, 5000) as number
-    console.info('[SyncManager] backgroundPoll started (5s check, 30s poll, screen-gated, local-clipboard-detect)')
+    }, bgPollInterval) as number
+    console.info('[SyncManager] 🔄 bgPoll started (2s interval, screen-gated)')
   }
 
   private stopBackgroundPoll(): void {
@@ -1688,6 +1747,10 @@ export class SyncManager {
         const pasteData: pasteboard.PasteData =
           pasteboard.createData(pasteboard.MIMETYPE_TEXT_URI, filePath)
         this.systemPasteboard.setDataSync(pasteData)
+        // 同步 changeCount 和缓存，防止后续监听器误判为远端变化导致回环
+        this.lastChangeCount = this.systemPasteboard.getChangeCount()
+        this._cachedClipboardText = filePath
+        this._clipboardDirty = false
         this.isRemoteUpdate = false
       } catch (_e) {
         console.error('[SyncManager] savePendingFile: clipboard write failed')

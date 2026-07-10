@@ -51,12 +51,12 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
-    console.info('[ClipboardSync] EntryAbility onForeground')
+    console.info('[ClipboardSync] ▶️ onForeground at ' + new Date().toLocaleTimeString())
     getSharedSyncManager().onAppForeground()
   }
 
   onBackground(): void {
-    console.info('[ClipboardSync] EntryAbility onBackground')
+    console.info('[ClipboardSync] ⏸️ onBackground at ' + new Date().toLocaleTimeString())
     void this.startBackgroundRunning()
   }
 

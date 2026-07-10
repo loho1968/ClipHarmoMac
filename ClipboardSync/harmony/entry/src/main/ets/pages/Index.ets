@@ -838,13 +838,18 @@ struct Index {
   private async selectSaveDirectory(): Promise<void> {
     try {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext
-      const options = new picker.DocumentSelectOptions()
-      options.maxSelectNumber = 1
+      // 使用 DocumentSaveOptions 而非 DocumentSelectOptions，让用户选择目录而非文件
+      const options = new picker.DocumentSaveOptions()
+      options.newFileNames = ['placeholder']
       const documentPicker = new picker.DocumentViewPicker(ctx)
-      const result: string[] = await documentPicker.select(options)
+      const result: string[] = await documentPicker.save(options)
       if (result.length > 0) {
-        SaveDirectoryManager.getInstance().setDirectory(result[0])
-        this.saveDir = result[0]
+        // 返回的 URI 包含占位文件名，提取父目录作为保存目录
+        const fullPath = result[0]
+        const lastSlash = fullPath.lastIndexOf('/')
+        const dirPath = lastSlash > 0 ? fullPath.substring(0, lastSlash) : fullPath
+        SaveDirectoryManager.getInstance().setDirectory(dirPath)
+        this.saveDir = dirPath
       }
     } catch (_e) {
       console.error('[Index] selectSaveDirectory failed')
@@ -869,7 +874,6 @@ struct Index {
       return
     }
     const fileId = this.pendingFile.id
-    const fileName = this.pendingFile.fileName
     this.showSaveDialog = false
     this.cancelSaveCountdown()
 
@@ -906,14 +910,19 @@ struct Index {
     this.cancelSaveCountdown()
     try {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext
-      const options = new picker.DocumentSelectOptions()
-      options.maxSelectNumber = 1
+      // 使用 DocumentSaveOptions 而非 DocumentSelectOptions，让用户选择目录而非文件
+      const options = new picker.DocumentSaveOptions()
+      options.newFileNames = ['placeholder']
       const documentPicker = new picker.DocumentViewPicker(ctx)
-      const result: string[] = await documentPicker.select(options)
+      const result: string[] = await documentPicker.save(options)
       if (result.length > 0) {
-        SaveDirectoryManager.getInstance().setDirectory(result[0])
-        this.saveDir = result[0]
-        this.doSaveFile(result[0])
+        // 返回的 URI 包含占位文件名，提取父目录作为保存目录
+        const fullPath = result[0]
+        const lastSlash = fullPath.lastIndexOf('/')
+        const dirPath = lastSlash > 0 ? fullPath.substring(0, lastSlash) : fullPath
+        SaveDirectoryManager.getInstance().setDirectory(dirPath)
+        this.saveDir = dirPath
+        this.doSaveFile(dirPath)
       }
     } catch (_e) {
       console.error('[Index] pickDirectoryAndSave failed')
