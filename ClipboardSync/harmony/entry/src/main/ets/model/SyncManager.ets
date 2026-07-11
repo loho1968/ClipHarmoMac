@@ -938,14 +938,19 @@ export class SyncManager {
       }
     }
 
-    // 只有本地无变化时才拉取 Mac 剪贴板，防止 Mac 旧内容覆盖刚推送的本地内容
-    // 等 Mac 确认收到并自身剪贴板更新后，下次 poll 自然是最新的
+    // 只有本地无变化 + 当前未连接时，才拉取 Mac 剪贴板（断线追补）。
+    // 如果已经连接，Mac 会主动推送新内容，不需要手机端拉取——
+    // 拉取反而会把 Mac 的旧内容覆盖手机用户刚复制的文字。
     if (!hadLocalChange) {
-      setTimeout(() => {
-        this.addImmediatePoll()
-      }, 1500)
+      if (!this.tcpClient.connected && !this.wsClient.connected) {
+        setTimeout(() => {
+          this.addImmediatePoll()
+        }, 1500)
+      } else {
+        console.info('[SyncManager] onAppForeground: already connected, skipping pull')
+      }
     } else {
-      console.info('[SyncManager] onAppForeground: skipping poll (just pushed local clipboard)')
+      console.info('[SyncManager] onAppForeground: had local change, skipping pull')
     }
   }
 
@@ -1019,7 +1024,7 @@ export class SyncManager {
     this.screenOffTickCount = 0
     // 间隔 2 秒：熄屏唤醒后最快 2 秒内触发重连
     const bgPollInterval: number = 2000
-    // 30s / 2s = 15 ticks 触发一次定时拉取
+    // 30s / 2s = 15 ticks 检查一次是否需要重连（不再拉取 Mac 剪贴板）
     const bgPollTicks: number = 15
     this.backgroundPollTimerId = setInterval(() => {
       let active: boolean = false
@@ -1074,13 +1079,10 @@ export class SyncManager {
       this.pollTickCount++
       if (this.pollTickCount >= bgPollTicks) {
         this.pollTickCount = 0
-        const tcpOk: boolean = this.tcpClient.connected
-        const wsOk: boolean = this.wsClient.connected
-        if (tcpOk || wsOk) {
-          console.info('[SyncManager] bgPoll: periodic poll (30s) tcp=' + tcpOk + ' ws=' + wsOk)
-          this.requestRemoteClipboard()
-        } else {
-          console.info('[SyncManager] bgPoll: disconnected, reconnecting tcp=' + tcpOk + ' ws=' + wsOk)
+        // 仅断线时尝试重连，不再定时拉取 Mac 剪贴板。
+        // Mac 会主动推送新内容，手机端拉取反而会覆盖用户刚复制的内容。
+        if (!this.tcpClient.connected && !this.wsClient.connected) {
+          console.info('[SyncManager] bgPoll: disconnected, reconnecting')
           void this.ensureConnectionOnWakeup()
         }
       }
