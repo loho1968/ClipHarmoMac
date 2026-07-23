@@ -669,6 +669,11 @@ struct MainView: View {
                         .foregroundColor(Color(nsColor: .tertiaryLabelColor))
                 }
                 .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(record.content, forType: .string)
+                }
             }
             .listStyle(.plain)
         }

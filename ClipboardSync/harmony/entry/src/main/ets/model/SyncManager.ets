@@ -628,7 +628,13 @@ export class SyncManager {
     }
 
     // 解密数据消息
-    if (this.shouldEncryptType(msg.type) && this.crypto.isEncryptionReady) {
+    if (this.shouldEncryptType(msg.type)) {
+      if (!this.crypto.isEncryptionReady) {
+        // 加密密钥尚未就绪（key derivation 尚未完成），跳过此消息
+        // 不写入剪贴板，避免加密 Base64 密文污染本地剪贴板
+        console.warn('[SyncManager] Crypto key not ready, deferring encrypted message type=' + msg.type)
+        return
+      }
       try {
         decryptedMsg.content = await this.crypto.decrypt(
           msg.content,
