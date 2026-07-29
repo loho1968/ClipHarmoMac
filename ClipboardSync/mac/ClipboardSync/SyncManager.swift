@@ -37,6 +37,12 @@ class SyncManager: ObservableObject {
     /// 中继服务器主机（IP 或域名），修改后自动重连
     @Published var relayServerHost: String = RelayConfig.currentHost
 
+    /// 中继重连失败次数（连续），连接成功后归零；用于 UI 提示
+    @Published var relayReconnectFailCount: Int = 0
+
+    /// 中继是否处于持续失败状态（>=3 次连续失败）
+    var isRelayFailing: Bool { relayReconnectFailCount >= 3 }
+
     private let discovery = DiscoveryService()
     private let server = TCPServer()
     private let clipboard = ClipboardMonitor()
@@ -162,26 +168,36 @@ class SyncManager: ObservableObject {
         server.onClientConnected = { [weak self] remoteAddr in
             DispatchQueue.main.async {
                 guard let self else { return }
+                print("[SyncManager] ═══ TCP client connected ═══")
+                print("[SyncManager]   remoteAddr=\(remoteAddr)")
+                print("[SyncManager]   deviceIPMap has \(self.deviceIPMap.count) entries: \(self.deviceIPMap.keys.joined(separator: ", "))")
+                print("[SyncManager]   wsClient.isConnected=\(self.wsClient.isConnected)")
                 self.status = .connected
                 // 优先使用 UDP 发现的 deviceId，回退到 IP 地址
                 self.connectedDevice = self.deviceIPMap[remoteAddr] ?? remoteAddr
                 self.connectionMode = .lan
-                print("[SyncManager] TCP connected, device=\(self.connectedDevice ?? remoteAddr)")
+                print("[SyncManager]   → connectedDevice=\(self.connectedDevice ?? remoteAddr) mode=LAN")
             }
         }
 
         server.onClientDisconnected = { [weak self] in
             DispatchQueue.main.async {
-                if self?.server.connectedCount == 0 {
+                guard let self else { return }
+                print("[SyncManager] ═══ TCP client disconnected ═══")
+                print("[SyncManager]   connectedCount=\(self.server.connectedCount)")
+                print("[SyncManager]   wsClient.isConnected=\(self.wsClient.isConnected)")
+                if self.server.connectedCount == 0 {
                     // LAN 断开，检测中继是否可用
-                    if self?.wsClient.isConnected == true {
-                        self?.connectionMode = .relay
-                        self?.status = .connected
+                    if self.wsClient.isConnected == true {
+                        self.connectionMode = .relay
+                        self.status = .connected
+                        print("[SyncManager]   → LAN gone, switched to relay")
                     } else {
-                        self?.status = .discovering
-                        self?.connectionMode = .none
+                        self.status = .discovering
+                        self.connectionMode = .none
+                        print("[SyncManager]   → LAN gone, no relay — searching...")
                     }
-                    self?.connectedDevice = nil
+                    self.connectedDevice = nil
                 }
             }
         }
@@ -203,31 +219,45 @@ class SyncManager: ObservableObject {
         wsClient.onConnected = { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] WS onConnected, lanCount=\(self.server.connectedCount)")
+                print("[SyncManager] ═══ WS onConnected ═══")
+                print("[SyncManager]   lanCount=\(self.server.connectedCount)")
+                print("[SyncManager]   wsClient.pairedDeviceId=\(self.wsClient.pairedDeviceId ?? "nil")")
+                print("[SyncManager]   current status=\(self.status.rawValue) mode=\(self.connectionMode.rawValue)")
                 // 仅当 LAN 未连接时才切换到 relay 模式
                 if self.server.connectedCount == 0 {
                     self.connectionMode = .relay
                     self.status = .connected
+                    print("[SyncManager]   → switched to relay mode, status=connected")
+                } else {
+                    print("[SyncManager]   → LAN active, keeping LAN mode")
                 }
+                self.relayReconnectFailCount = 0  // 连接成功，清零失败计数
                 self.relayPairedDeviceId = self.wsClient.pairedDeviceId
                 self.relayStatusText = self.wsClient.pairedDeviceId != nil
                     ? "已配对: \(self.wsClient.pairedDeviceId!)"
                     : "等待设备加入..."
+                print("[SyncManager]   relayStatusText=\(self.relayStatusText)")
             }
         }
 
         wsClient.onDisconnected = { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] WS onDisconnected, mode=\(self.connectionMode.rawValue)")
+                print("[SyncManager] ═══ WS onDisconnected ═══")
+                print("[SyncManager]   mode=\(self.connectionMode.rawValue) lanCount=\(self.server.connectedCount)")
+                print("[SyncManager]   isRetrying=\(self.wsClient.isRetrying)")
                 if self.connectionMode == .relay {
                     self.connectionMode = (self.server.connectedCount > 0) ? .lan : .none
                     self.status = (self.server.connectedCount > 0) ? .connected : .discovering
+                    print("[SyncManager]   → mode=\(self.connectionMode.rawValue) status=\(self.status.rawValue)")
                 }
                 self.relayPairedDeviceId = nil
                 // 区分：用户主动断开 vs 意外断开重连中
                 if self.wsClient.isRetrying {
-                    self.relayStatusText = "中继重连中..."
+                    self.relayReconnectFailCount += 1
+                    self.relayStatusText = self.relayReconnectFailCount >= 3
+                        ? "中继重连中...（失败\(self.relayReconnectFailCount)次，请检查服务器）"
+                        : "中继重连中..."
                 } else {
                     self.relayStatusText = "中继已断开"
                 }
@@ -241,17 +271,24 @@ class SyncManager: ObservableObject {
         wsClient.onPaired = { [weak self] deviceId in
             DispatchQueue.main.async {
                 guard let self else { return }
+                print("[SyncManager] ═══ WS onPaired ═══")
+                print("[SyncManager]   pairedDeviceId=\(deviceId)")
+                print("[SyncManager]   lanCount=\(self.server.connectedCount)")
+                print("[SyncManager]   current status=\(self.status.rawValue) mode=\(self.connectionMode.rawValue)")
+                self.relayReconnectFailCount = 0  // 配对成功，清零
                 self.relayPairedDeviceId = deviceId
                 self.relayStatusText = "已配对: \(deviceId)"
                 if self.server.connectedCount == 0 {
                     self.connectionMode = .relay
                     self.status = .connected
+                    print("[SyncManager]   → switched to relay mode, status=connected")
                 }
             }
         }
 
-        wsClient.onPeerGone = { [weak self] _ in
+        wsClient.onPeerGone = { [weak self] deviceId in
             DispatchQueue.main.async {
+                print("[SyncManager] ═══ WS onPeerGone: \(deviceId) ═══")
                 self?.relayPairedDeviceId = nil
                 self?.relayStatusText = "配对设备已离线"
             }
@@ -259,6 +296,7 @@ class SyncManager: ObservableObject {
 
         wsClient.onError = { [weak self] errorMsg in
             DispatchQueue.main.async {
+                print("[SyncManager] ═══ WS onError: \(errorMsg) ═══")
                 self?.relayStatusText = "中继错误: \(errorMsg)"
             }
         }
@@ -273,13 +311,22 @@ class SyncManager: ObservableObject {
         let hasConfigFile = FileManager.default.fileExists(atPath: configURL.path)
         // 检查用户是否手动设置过host（与默认值不同）
         let hasCustomHost = RelayConfig.sharedDefaults.string(forKey: RelayConfig.hostDefaultsKey) != nil
-        return hasConfigFile || hasCustomHost
+        let result = hasConfigFile || hasCustomHost
+        print("[SyncManager] hasRelayConfig=\(result) (configFile=\(hasConfigFile) at \(configURL.path), customHost=\(hasCustomHost ? RelayConfig.sharedDefaults.string(forKey: RelayConfig.hostDefaultsKey)! : "nil"))")
+        return result
     }
 
     private func startRelayIfNeeded() {
         let savedKey = RelayConfig.sharedDefaults.string(forKey: RelayConfig.roomKeyDefaultsKey) ?? ""
         let currentHost = RelayConfig.currentHost
-        print("[SyncManager] startRelay: savedKey=\(savedKey.isEmpty ? "(empty)" : savedKey) host=\(currentHost) hasRelayConfig=\(hasRelayConfig)")
+        let defaultHost = RelayConfig.defaultHost
+        let serverURL = RelayConfig.serverURL
+        print("[SyncManager] ═══ startRelayIfNeeded ═══")
+        print("[SyncManager]   savedKey    = \(savedKey.isEmpty ? "(empty)" : savedKey)")
+        print("[SyncManager]   currentHost = \(currentHost)")
+        print("[SyncManager]   defaultHost = \(defaultHost)")
+        print("[SyncManager]   serverURL   = \(serverURL.absoluteString)")
+        print("[SyncManager]   hasRelayConfig = \(hasRelayConfig)")
 
         // Room Key 始终生成并持久化（TCP roomKeyInfo 交换需要）
         if savedKey.isEmpty {
@@ -293,11 +340,14 @@ class SyncManager: ObservableObject {
 
         // 仅在有中继配置时才连接 WebSocket
         guard hasRelayConfig else {
-            print("[SyncManager] No relay config found, skipping WebSocket connection (LAN-only mode)")
+            print("[SyncManager] ⚠️  No relay config found — staying in LAN-only mode")
+            print("[SyncManager] ⚠️  手机5G连接必须配置云中继服务器，否则只能同WiFi使用")
+            print("[SyncManager] ⚠️  配置方式: 1) 在界面输入中继服务器地址 2) 放置 ~/.clipboardsync/relay_config.json")
             relayStatusText = "未配置中继服务器"
             return
         }
 
+        print("[SyncManager] ✓ Connecting to relay: \(serverURL.absoluteString) roomKey=\(roomKey)")
         wsClient.connect(to: RelayConfig.serverURL, roomKey: roomKey)
     }
 
@@ -352,17 +402,26 @@ class SyncManager: ObservableObject {
         var dict: [String: Any] = [
             "v": 1,
             "rk": roomKey,
-            "rh": RelayConfig.currentHost,
         ]
+        // 仅在有中继配置时才包含中继服务器地址，避免手机尝试连接 localhost
+        if hasRelayConfig {
+            dict["rh"] = RelayConfig.currentHost
+        } else {
+            print("[SyncManager] qrCodeData: relay not configured, omitting rh from QR code")
+        }
         // 附上局域网 IP（手机在同一 WiFi 下可直连）
         if let localIP = SyncManager.getLocalIPAddress() {
             dict["ip"] = localIP
         }
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: dict),
-              let jsonString = String(data: jsonData, encoding: .utf8) else {
-            return ""
+        let qrString: String
+        if let jsonData = try? JSONSerialization.data(withJSONObject: dict),
+           let jsonString = String(data: jsonData, encoding: .utf8) {
+            qrString = jsonString
+        } else {
+            qrString = ""
         }
-        return jsonString
+        print("[SyncManager] qrCodeData: \(qrString)")
+        return qrString
     }
 
     /// 生成仅含局域网 IP 的二维码数据（中继不可用时扫码直连）

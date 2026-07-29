@@ -125,6 +125,9 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func doConnect(url: URL) {
         isConnecting = true
         connectionMode = .connecting
+        print("[WSClient] ═══ doConnect ═══")
+        print("[WSClient]   url = \(url.absoluteString)")
+        print("[WSClient]   roomKey = \(roomKey)")
         // 显式设置 WebSocket 握手头，防止 URLSessionWebSocketTask 在某些
         // macOS 版本（如 Darwin 25.x）上漏发 Upgrade/Connection 头
         var request = URLRequest(url: url)
@@ -209,21 +212,29 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func routeMessage(_ msg: RelayMessage) {
         switch msg.action {
         case RelayAction.authOk.rawValue:
-            print("[WSClient]AUTH_OK received, pairedDeviceId=\(msg.pairedDeviceId ?? "nil")")
+            let pid = msg.pairedDeviceId
+            let roomCount = msg.roomDeviceCount
+            print("[WSClient] ═══ AUTH_OK received ═══")
+            print("[WSClient]   pairedDeviceId = \(pid ?? "nil")")
+            print("[WSClient]   roomDeviceCount = \(roomCount ?? -1)")
+            print("[WSClient]   isRetrying = \(isRetrying)")
             isConnected = true
             isConnecting = false
             reconnectAttempt = 0
-            pairedDeviceId = msg.pairedDeviceId
-            let mode: ConnectionMode = (msg.pairedDeviceId != nil) ? .paired : .waitingForPair
+            pairedDeviceId = pid
+            let mode: ConnectionMode = (pid != nil) ? .paired : .waitingForPair
             connectionMode = mode
+            print("[WSClient]   → mode = \(mode)")
             startHeartbeat()
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.onAuthResult?(true, self.pairedDeviceId)
-                if let pid = msg.pairedDeviceId {
+                if let pid = pid {
+                    print("[WSClient]   → calling onPaired(\(pid))")
                     self.onPaired?(pid)
                 }
+                print("[WSClient]   → calling onConnected()")
                 self.onConnected?()
             }
 
@@ -270,9 +281,13 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func handleDisconnect(error: Error?) {
         // 防止 didClose delegate 与 receive error 重复触发
         guard isConnected || isConnecting else {
+            print("[WSClient] handleDisconnect ignored: already disconnected (isConnected=\(isConnected), isConnecting=\(isConnecting))")
             return
         }
-        print("[WSClient]Disconnected: \(error?.localizedDescription ?? "normal"), shouldReconnect=\(self.shouldReconnect)")
+        print("[WSClient] ═══ Disconnected ═══")
+        print("[WSClient]   error = \(error?.localizedDescription ?? "normal")")
+        print("[WSClient]   shouldReconnect = \(self.shouldReconnect)")
+        print("[WSClient]   reconnectAttempt = \(self.reconnectAttempt)")
         isConnected = false
         isConnecting = false
         stopHeartbeat()

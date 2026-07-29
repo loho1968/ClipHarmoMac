@@ -66,13 +66,33 @@ struct MainView: View {
                         .font(.system(size: 14, weight: .semibold))
 
                     if syncManager.status == .connected {
-                        Text("剪贴板将自动同步")
-                            .font(.system(size: 11))
-                            .foregroundColor(.green)
+                        if syncManager.connectionMode == .relay {
+                            Text("云中继 · 剪贴板将自动同步")
+                                .font(.system(size: 11))
+                                .foregroundColor(.green)
+                        } else {
+                            Text("局域网 · 剪贴板将自动同步")
+                                .font(.system(size: 11))
+                                .foregroundColor(.green)
+                        }
                     } else if syncManager.status == .discovering {
-                        Text("搜索局域网中的设备...")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+                        if syncManager.relayStatusText.contains("未配置中继")
+                            || syncManager.relayStatusText.contains("中继已断开")
+                            || syncManager.relayStatusText.contains("中继重连中")
+                            || syncManager.relayStatusText.contains("中继错误") {
+                            Text("⚠️ 中继未连接 — 仅局域网可用")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                            if syncManager.relayReconnectFailCount >= 3 {
+                                Text("已重试\(syncManager.relayReconnectFailCount)次，请检查中继服务器是否运行")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.red)
+                            }
+                        } else {
+                            Text("搜索局域网中的设备...")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
                     } else {
                         Text("点击刷新重新搜索")
                             .font(.system(size: 11))
@@ -81,6 +101,14 @@ struct MainView: View {
                 }
 
                 Spacer()
+
+                // 中继失败警告图标
+                if syncManager.isRelayFailing && syncManager.status != .connected {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 14))
+                        .foregroundColor(.orange)
+                        .help(syncManager.relayStatusText)
+                }
 
                 // 连接的设备信息
                 if let device = syncManager.connectedDevice {

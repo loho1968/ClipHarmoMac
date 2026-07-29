@@ -445,7 +445,7 @@ export class SyncManager {
 
   private setupWSCallbacks(): void {
     this.wsClient.onConnected = () => {
-      console.info('[SyncManager] WS connected')
+      console.info('[SyncManager] WS connected, pairedDeviceId=' + this.wsClient.currentPairedDeviceId)
       if (!this.tcpClient.connected) {
         this._connectionMode = ConnectionMode.RELAY
         this._status = SyncStatus.CONNECTED
@@ -462,14 +462,19 @@ export class SyncManager {
     }
 
     this.wsClient.onDisconnected = () => {
-      console.info('[SyncManager] WS disconnected')
+      console.info('[SyncManager] WS disconnected, wsMode=' + this.wsClient.currentMode)
       if (this._connectionMode === ConnectionMode.RELAY) {
         this._connectionMode = ConnectionMode.NONE
         this._status = SyncStatus.DISCOVERING
         this.discovery.resetFoundDevices()
       }
       this._relayPairedDeviceId = ''
-      this._relayStatusText = '中继已断开'
+      // 区分：重连中 vs 彻底断开
+      if (this.wsClient.currentMode === 'connecting') {
+        this._relayStatusText = '中继重连中...'
+      } else {
+        this._relayStatusText = '中继已断开'
+      }
       this.onStateChange?.()
     }
 
@@ -512,7 +517,7 @@ export class SyncManager {
   // ============ 中继连接 ============
 
   private async initRelay(): Promise<void> {
-    console.info('[SyncManager] initRelay() called')
+    console.info('[SyncManager] ═══ initRelay() ═══')
     const ctx = this._context
     if (!ctx) {
       console.error('[SyncManager] initRelay: NO CONTEXT, abort')
@@ -530,6 +535,7 @@ export class SyncManager {
     }
     // 加载已保存的服务器主机
     const savedHost: string = this.relayPrefs.getSync(RelayConfig.HOST_STORAGE_KEY, RelayConfig.DEFAULT_HOST) as string
+    console.info('[SyncManager] initRelay: savedHost=' + (savedHost || '(empty)') + ' DEFAULT_HOST=' + RelayConfig.DEFAULT_HOST)
     if (savedHost.length > 0) {
       this._relayServerHost = savedHost
     }
@@ -541,10 +547,10 @@ export class SyncManager {
       // 从配对码派生 AES 加密密钥
       void this.crypto.deriveKeyFromRoomKey(savedKey)
       const url = RelayConfig.buildURL(this._relayServerHost)
-      console.info('[SyncManager] initRelay: connecting to ' + url)
+      console.info('[SyncManager] initRelay: auto-connecting to ' + url + ' with saved key')
       this.wsClient.connect(url, savedKey)
     } else {
-      console.info('[SyncManager] initRelay: no saved key, waiting for TCP roomKeyInfo')
+      console.info('[SyncManager] initRelay: no saved key, waiting for TCP roomKeyInfo or QR scan')
     }
   }
 
@@ -557,6 +563,9 @@ export class SyncManager {
       console.error('[SyncManager] Invalid room key length: ' + roomKey.length)
       return
     }
+    console.info('[SyncManager] ═══ setRoomKey ═══')
+    console.info('[SyncManager]   roomKey = ' + roomKey)
+    console.info('[SyncManager]   relayHost = ' + this._relayServerHost)
     this._roomKey = roomKey
     // 持久化
     if (this.relayPrefs) {
@@ -568,6 +577,7 @@ export class SyncManager {
     // 先断开旧连接（如果有），再用新 key 连接
     this.wsClient.disconnect()
     const url = RelayConfig.buildURL(this._relayServerHost)
+    console.info('[SyncManager]   → connecting to: ' + url)
     this.wsClient.connect(url, roomKey)
     this._relayStatusText = '正在连接中继...'
     this.onStateChange?.()
@@ -582,6 +592,7 @@ export class SyncManager {
     if (trimmed.length === 0) {
       return
     }
+    console.info('[SyncManager] ═══ updateRelayHost: ' + trimmed + ' ═══')
     this._relayServerHost = trimmed
     // 持久化
     if (this.relayPrefs) {
@@ -592,9 +603,11 @@ export class SyncManager {
     this.wsClient.disconnect()
     if (this._roomKey.length > 0) {
       const url = RelayConfig.buildURL(trimmed)
+      console.info('[SyncManager]   → reconnecting to: ' + url + ' roomKey=' + this._roomKey)
       this.wsClient.connect(url, this._roomKey)
       this._relayStatusText = '服务器地址已更新，重连中...'
     } else {
+      console.info('[SyncManager]   → host updated but no roomKey, waiting for roomKey')
       this._relayStatusText = '服务器地址已更新'
     }
     this.onStateChange?.()
@@ -1172,11 +1185,12 @@ export class SyncManager {
    * 二维码格式: {"v":1,"rk":"A1B2C3","rh":"host","ip":"192.168.1.5"}
    */
   processQRCode(qrData: string): void {
-    console.info('[SyncManager] processQRCode: ' + qrData)
+    console.info('[SyncManager] ═══ processQRCode ═══')
+    console.info('[SyncManager]   raw data: ' + qrData)
     try {
       const data = JSON.parse(qrData) as Record<string, Object>
       if (!data || (data.v as number) !== 1) {
-        console.error('[SyncManager] Invalid QR code: wrong version')
+        console.error('[SyncManager]   ✗ Invalid QR code: wrong version')
         return
       }
 
@@ -1184,25 +1198,42 @@ export class SyncManager {
       const relayHost: string = (data.rh as string) || ''
       const localIP: string = (data.ip as string) || ''
 
+      console.info('[SyncManager]   parsed: rk=' + (roomKey || '(empty)') + ' rh=' + (relayHost || '(empty)') + ' ip=' + (localIP || '(empty)'))
+      console.info('[SyncManager]   current relayHost=' + this._relayServerHost + ' current roomKey=' + this._roomKey)
+      console.info('[SyncManager]   tcpClient.connected=' + this.tcpClient.connected + ' wsClient.connected=' + this.wsClient.connected)
+
       if (roomKey.length === RelayConfig.ROOM_KEY_LENGTH) {
         // 更新中继服务器地址
         if (relayHost.length > 0) {
+          console.info('[SyncManager]   → updating relayHost to: ' + relayHost)
           this.updateRelayHost(relayHost)
+        } else {
+          console.info('[SyncManager]   → QR code has no relayHost (rh), skipping relay update')
+        }
+        // 过滤明显的无效 host（localhost、127.0.0.1 等在手机上无意义）
+        const effectiveHost = relayHost.length > 0 ? relayHost : this._relayServerHost
+        const isLocalHost = effectiveHost === 'localhost' || effectiveHost === '127.0.0.1' || effectiveHost === '::1'
+        if (isLocalHost) {
+          console.warn('[SyncManager]   ⚠️ relayHost is localhost/loopback — unreachable over 5G!')
+          console.warn('[SyncManager]   ⚠️ 请在 Mac 端配置公网可达的中继服务器地址')
         }
         // 设置配对码并连接中继
         this.setRoomKey(roomKey)
-        console.info('[SyncManager] QR code: relay paired')
+        console.info('[SyncManager]   ✓ setRoomKey(' + roomKey + '), connecting via relay URL: ' + RelayConfig.buildURL(effectiveHost))
+      } else {
+        console.info('[SyncManager]   → roomKey length=' + roomKey.length + ' (expected ' + RelayConfig.ROOM_KEY_LENGTH + '), skipping relay')
       }
 
       // 同一 WiFi 下可尝试直连
       if (localIP.length > 0 && !this.tcpClient.connected) {
         setTimeout(() => {
+          console.info('[SyncManager]   → attempting TCP direct connect to ' + localIP)
           this.connectManual(localIP)
         }, 1000)
-        console.info('[SyncManager] QR code: connecting TCP to ' + localIP)
+        console.info('[SyncManager]   scheduled TCP connect to ' + localIP + ' in 1s')
       }
     } catch (e) {
-      console.error('[SyncManager] QR code parse error: ' + JSON.stringify(e))
+      console.error('[SyncManager]   ✗ QR code parse error: ' + JSON.stringify(e))
     }
   }
 

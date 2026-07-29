@@ -490,6 +490,21 @@ struct Index {
       .width('100%')
 
       if (this.syncStatus === SyncStatus.DISCOVERING) {
+        // 中继连接失败提示
+        if (this.relayStatusText.indexOf('中继重连中') >= 0 ||
+            this.relayStatusText.indexOf('中继已断开') >= 0 ||
+            this.relayStatusText.indexOf('中继错误') >= 0 ||
+            this.relayStatusText.indexOf('未配置中继') >= 0) {
+          Text('⚠️ 中继未连接 — 仅局域网可用')
+            .fontSize(12)
+            .fontColor('#FF9800')
+          if (this.relayStatusText.length > 0) {
+            Text(this.relayStatusText)
+              .fontSize(10)
+              .fontColor('#FF5722')
+              .margin({ top: 2 })
+          }
+        }
         Text('正在搜索局域网中的 Mac 设备...')
           .fontSize(12)
           .fontColor('#999999')
@@ -505,9 +520,15 @@ struct Index {
             .width(14)
             .height(14)
             .fillColor('#4CAF50')
-          Text('已连接，剪贴板将自动同步')
-            .fontSize(12)
-            .fontColor('#4CAF50')
+          if (this.connectionMode === ConnectionMode.RELAY) {
+            Text('云中继 · 剪贴板将自动同步')
+              .fontSize(12)
+              .fontColor('#4CAF50')
+          } else {
+            Text('已连接，剪贴板将自动同步')
+              .fontSize(12)
+              .fontColor('#4CAF50')
+          }
         }
       }
 
@@ -947,6 +968,12 @@ struct Index {
   // ============ 辅助 ============
 
   private get statusColor(): string {
+    // 中继连接失败优先显示红色
+    if (this.relayStatusText.indexOf('中继重连中') >= 0 ||
+        this.relayStatusText.indexOf('中继已断开') >= 0 ||
+        this.relayStatusText.indexOf('中继错误') >= 0) {
+      return '#FF5722'
+    }
     switch (this.syncStatus) {
       case SyncStatus.CONNECTED:
         return '#4CAF50'
