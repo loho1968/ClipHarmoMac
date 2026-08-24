@@ -116,7 +116,7 @@ class SyncManager: ObservableObject {
     private func startNetworkMonitor() {
         networkMonitor.onNetworkChange = { [weak self] in
             guard let self else { return }
-            print("[SyncManager] Network changed, restarting LAN services...")
+            clipLog("[SyncManager] Network changed, restarting LAN services...")
             // 重启 LAN 发现和 TCP 服务，让手机在新网络中找到 Mac
             self.restartLANServices()
         }
@@ -133,12 +133,12 @@ class SyncManager: ObservableObject {
             guard let self else { return }
             self.server.start()
             self.discovery.start()
-            print("[SyncManager] LAN services restarted")
+            clipLog("[SyncManager] LAN services restarted")
         }
 
         // 网络恢复后也强制重连中继（重置退避计数器、立即尝试）
         if hasRelayConfig && !wsClient.isConnected {
-            print("[SyncManager] Network changed, force reconnecting relay...")
+            clipLog("[SyncManager] Network changed, force reconnecting relay...")
             relayStatusText = "重连中..."
             wsClient.forceReconnect()
         }
@@ -151,14 +151,14 @@ class SyncManager: ObservableObject {
                 guard let self else { return }
                 // 建立 IP → deviceId 映射
                 self.deviceIPMap[senderIP] = deviceId
-                print("[SyncManager] UDP discovered \(deviceId) at \(senderIP)")
+                clipLog("[SyncManager] UDP discovered \(deviceId) at \(senderIP)")
 
                 // 若已 TCP 连接但 connectedDevice 仍为 IP，用 deviceId 替换
                 if self.status == .connected, let currentDevice = self.connectedDevice {
                     // 检查当前 connectedDevice 是否为 IP 地址（格式如 "192.168.x.x"）
                     if currentDevice.contains(".") && self.deviceIPMap[currentDevice] != nil {
                         self.connectedDevice = self.deviceIPMap[currentDevice]
-                        print("[SyncManager] Updated connectedDevice from IP to \(self.connectedDevice ?? currentDevice)")
+                        clipLog("[SyncManager] Updated connectedDevice from IP to \(self.connectedDevice ?? currentDevice)")
                     }
                 }
             }
@@ -168,34 +168,34 @@ class SyncManager: ObservableObject {
         server.onClientConnected = { [weak self] remoteAddr in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] ═══ TCP client connected ═══")
-                print("[SyncManager]   remoteAddr=\(remoteAddr)")
-                print("[SyncManager]   deviceIPMap has \(self.deviceIPMap.count) entries: \(self.deviceIPMap.keys.joined(separator: ", "))")
-                print("[SyncManager]   wsClient.isConnected=\(self.wsClient.isConnected)")
+                clipLog("[SyncManager] ═══ TCP client connected ═══")
+                clipLog("[SyncManager]   remoteAddr=\(remoteAddr)")
+                clipLog("[SyncManager]   deviceIPMap has \(self.deviceIPMap.count) entries: \(self.deviceIPMap.keys.joined(separator: ", "))")
+                clipLog("[SyncManager]   wsClient.isConnected=\(self.wsClient.isConnected)")
                 self.status = .connected
                 // 优先使用 UDP 发现的 deviceId，回退到 IP 地址
                 self.connectedDevice = self.deviceIPMap[remoteAddr] ?? remoteAddr
                 self.connectionMode = .lan
-                print("[SyncManager]   → connectedDevice=\(self.connectedDevice ?? remoteAddr) mode=LAN")
+                clipLog("[SyncManager]   → connectedDevice=\(self.connectedDevice ?? remoteAddr) mode=LAN")
             }
         }
 
         server.onClientDisconnected = { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] ═══ TCP client disconnected ═══")
-                print("[SyncManager]   connectedCount=\(self.server.connectedCount)")
-                print("[SyncManager]   wsClient.isConnected=\(self.wsClient.isConnected)")
+                clipLog("[SyncManager] ═══ TCP client disconnected ═══")
+                clipLog("[SyncManager]   connectedCount=\(self.server.connectedCount)")
+                clipLog("[SyncManager]   wsClient.isConnected=\(self.wsClient.isConnected)")
                 if self.server.connectedCount == 0 {
                     // LAN 断开，检测中继是否可用
                     if self.wsClient.isConnected == true {
                         self.connectionMode = .relay
                         self.status = .connected
-                        print("[SyncManager]   → LAN gone, switched to relay")
+                        clipLog("[SyncManager]   → LAN gone, switched to relay")
                     } else {
                         self.status = .discovering
                         self.connectionMode = .none
-                        print("[SyncManager]   → LAN gone, no relay — searching...")
+                        clipLog("[SyncManager]   → LAN gone, no relay — searching...")
                     }
                     self.connectedDevice = nil
                 }
@@ -219,37 +219,37 @@ class SyncManager: ObservableObject {
         wsClient.onConnected = { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] ═══ WS onConnected ═══")
-                print("[SyncManager]   lanCount=\(self.server.connectedCount)")
-                print("[SyncManager]   wsClient.pairedDeviceId=\(self.wsClient.pairedDeviceId ?? "nil")")
-                print("[SyncManager]   current status=\(self.status.rawValue) mode=\(self.connectionMode.rawValue)")
+                clipLog("[SyncManager] ═══ WS onConnected ═══")
+                clipLog("[SyncManager]   lanCount=\(self.server.connectedCount)")
+                clipLog("[SyncManager]   wsClient.pairedDeviceId=\(self.wsClient.pairedDeviceId ?? "nil")")
+                clipLog("[SyncManager]   current status=\(self.status.rawValue) mode=\(self.connectionMode.rawValue)")
                 // 仅当 LAN 未连接时才切换到 relay 模式
                 if self.server.connectedCount == 0 {
                     self.connectionMode = .relay
                     self.status = .connected
-                    print("[SyncManager]   → switched to relay mode, status=connected")
+                    clipLog("[SyncManager]   → switched to relay mode, status=connected")
                 } else {
-                    print("[SyncManager]   → LAN active, keeping LAN mode")
+                    clipLog("[SyncManager]   → LAN active, keeping LAN mode")
                 }
                 self.relayReconnectFailCount = 0  // 连接成功，清零失败计数
                 self.relayPairedDeviceId = self.wsClient.pairedDeviceId
                 self.relayStatusText = self.wsClient.pairedDeviceId != nil
                     ? "已配对: \(self.wsClient.pairedDeviceId!)"
                     : "等待设备加入..."
-                print("[SyncManager]   relayStatusText=\(self.relayStatusText)")
+                clipLog("[SyncManager]   relayStatusText=\(self.relayStatusText)")
             }
         }
 
         wsClient.onDisconnected = { [weak self] in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] ═══ WS onDisconnected ═══")
-                print("[SyncManager]   mode=\(self.connectionMode.rawValue) lanCount=\(self.server.connectedCount)")
-                print("[SyncManager]   isRetrying=\(self.wsClient.isRetrying)")
+                clipLog("[SyncManager] ═══ WS onDisconnected ═══")
+                clipLog("[SyncManager]   mode=\(self.connectionMode.rawValue) lanCount=\(self.server.connectedCount)")
+                clipLog("[SyncManager]   isRetrying=\(self.wsClient.isRetrying)")
                 if self.connectionMode == .relay {
                     self.connectionMode = (self.server.connectedCount > 0) ? .lan : .none
                     self.status = (self.server.connectedCount > 0) ? .connected : .discovering
-                    print("[SyncManager]   → mode=\(self.connectionMode.rawValue) status=\(self.status.rawValue)")
+                    clipLog("[SyncManager]   → mode=\(self.connectionMode.rawValue) status=\(self.status.rawValue)")
                 }
                 self.relayPairedDeviceId = nil
                 // 区分：用户主动断开 vs 意外断开重连中
@@ -271,32 +271,40 @@ class SyncManager: ObservableObject {
         wsClient.onPaired = { [weak self] deviceId in
             DispatchQueue.main.async {
                 guard let self else { return }
-                print("[SyncManager] ═══ WS onPaired ═══")
-                print("[SyncManager]   pairedDeviceId=\(deviceId)")
-                print("[SyncManager]   lanCount=\(self.server.connectedCount)")
-                print("[SyncManager]   current status=\(self.status.rawValue) mode=\(self.connectionMode.rawValue)")
+                clipLog("[SyncManager] ═══ WS onPaired ═══")
+                clipLog("[SyncManager]   pairedDeviceId=\(deviceId)")
+                clipLog("[SyncManager]   lanCount=\(self.server.connectedCount)")
+                clipLog("[SyncManager]   current status=\(self.status.rawValue) mode=\(self.connectionMode.rawValue)")
                 self.relayReconnectFailCount = 0  // 配对成功，清零
                 self.relayPairedDeviceId = deviceId
                 self.relayStatusText = "已配对: \(deviceId)"
                 if self.server.connectedCount == 0 {
                     self.connectionMode = .relay
                     self.status = .connected
-                    print("[SyncManager]   → switched to relay mode, status=connected")
+                    clipLog("[SyncManager]   → switched to relay mode, status=connected")
                 }
             }
         }
 
         wsClient.onPeerGone = { [weak self] deviceId in
             DispatchQueue.main.async {
-                print("[SyncManager] ═══ WS onPeerGone: \(deviceId) ═══")
-                self?.relayPairedDeviceId = nil
-                self?.relayStatusText = "配对设备已离线"
+                guard let self else { return }
+                clipLog("[SyncManager] ═══ WS onPeerGone: \(deviceId) ═══")
+                clipLog("[SyncManager]   mode=\(self.connectionMode.rawValue) lanCount=\(self.server.connectedCount)")
+                self.relayPairedDeviceId = nil
+                self.relayStatusText = "配对设备已离线"
+                // 对端离线时若正处中继模式且无 LAN 连接，状态降级为"搜索中"，
+                // 避免图标仍显示绿色误导用户（对端断网/假连接的重要诊断线索）
+                if self.connectionMode == .relay, self.server.connectedCount == 0 {
+                    self.status = .discovering
+                    clipLog("[SyncManager]   → peer gone, status downgraded to discovering")
+                }
             }
         }
 
         wsClient.onError = { [weak self] errorMsg in
             DispatchQueue.main.async {
-                print("[SyncManager] ═══ WS onError: \(errorMsg) ═══")
+                clipLog("[SyncManager] ═══ WS onError: \(errorMsg) ═══")
                 self?.relayStatusText = "中继错误: \(errorMsg)"
             }
         }
@@ -312,7 +320,7 @@ class SyncManager: ObservableObject {
         // 检查用户是否手动设置过host（与默认值不同）
         let hasCustomHost = RelayConfig.sharedDefaults.string(forKey: RelayConfig.hostDefaultsKey) != nil
         let result = hasConfigFile || hasCustomHost
-        print("[SyncManager] hasRelayConfig=\(result) (configFile=\(hasConfigFile) at \(configURL.path), customHost=\(hasCustomHost ? RelayConfig.sharedDefaults.string(forKey: RelayConfig.hostDefaultsKey)! : "nil"))")
+        clipLog("[SyncManager] hasRelayConfig=\(result) (configFile=\(hasConfigFile) at \(configURL.path), customHost=\(hasCustomHost ? RelayConfig.sharedDefaults.string(forKey: RelayConfig.hostDefaultsKey)! : "nil"))")
         return result
     }
 
@@ -321,12 +329,12 @@ class SyncManager: ObservableObject {
         let currentHost = RelayConfig.currentHost
         let defaultHost = RelayConfig.defaultHost
         let serverURL = RelayConfig.serverURL
-        print("[SyncManager] ═══ startRelayIfNeeded ═══")
-        print("[SyncManager]   savedKey    = \(savedKey.isEmpty ? "(empty)" : savedKey)")
-        print("[SyncManager]   currentHost = \(currentHost)")
-        print("[SyncManager]   defaultHost = \(defaultHost)")
-        print("[SyncManager]   serverURL   = \(serverURL.absoluteString)")
-        print("[SyncManager]   hasRelayConfig = \(hasRelayConfig)")
+        clipLog("[SyncManager] ═══ startRelayIfNeeded ═══")
+        clipLog("[SyncManager]   savedKey    = \(savedKey.isEmpty ? "(empty)" : savedKey)")
+        clipLog("[SyncManager]   currentHost = \(currentHost)")
+        clipLog("[SyncManager]   defaultHost = \(defaultHost)")
+        clipLog("[SyncManager]   serverURL   = \(serverURL.absoluteString)")
+        clipLog("[SyncManager]   hasRelayConfig = \(hasRelayConfig)")
 
         // Room Key 始终生成并持久化（TCP roomKeyInfo 交换需要）
         if savedKey.isEmpty {
@@ -340,14 +348,14 @@ class SyncManager: ObservableObject {
 
         // 仅在有中继配置时才连接 WebSocket
         guard hasRelayConfig else {
-            print("[SyncManager] ⚠️  No relay config found — staying in LAN-only mode")
-            print("[SyncManager] ⚠️  手机5G连接必须配置云中继服务器，否则只能同WiFi使用")
-            print("[SyncManager] ⚠️  配置方式: 1) 在界面输入中继服务器地址 2) 放置 ~/.clipboardsync/relay_config.json")
+            clipLog("[SyncManager] ⚠️  No relay config found — staying in LAN-only mode")
+            clipLog("[SyncManager] ⚠️  手机5G连接必须配置云中继服务器，否则只能同WiFi使用")
+            clipLog("[SyncManager] ⚠️  配置方式: 1) 在界面输入中继服务器地址 2) 放置 ~/.clipboardsync/relay_config.json")
             relayStatusText = "未配置中继服务器"
             return
         }
 
-        print("[SyncManager] ✓ Connecting to relay: \(serverURL.absoluteString) roomKey=\(roomKey)")
+        clipLog("[SyncManager] ✓ Connecting to relay: \(serverURL.absoluteString) roomKey=\(roomKey)")
         wsClient.connect(to: RelayConfig.serverURL, roomKey: roomKey)
     }
 
@@ -357,7 +365,7 @@ class SyncManager: ObservableObject {
         let key = String((0..<RelayConfig.roomKeyLength).map { _ in chars.randomElement()! })
         RelayConfig.sharedDefaults.set(key, forKey: RelayConfig.roomKeyDefaultsKey)
         roomKey = key
-        print("[SyncManager] Room Key generated (LAN-only): \(key)")
+        clipLog("[SyncManager] Room Key generated (LAN-only): \(key)")
     }
 
     private func generateAndSaveRoomKey() {
@@ -407,7 +415,7 @@ class SyncManager: ObservableObject {
         if hasRelayConfig {
             dict["rh"] = RelayConfig.currentHost
         } else {
-            print("[SyncManager] qrCodeData: relay not configured, omitting rh from QR code")
+            clipLog("[SyncManager] qrCodeData: relay not configured, omitting rh from QR code")
         }
         // 附上局域网 IP（手机在同一 WiFi 下可直连）
         if let localIP = SyncManager.getLocalIPAddress() {
@@ -420,7 +428,7 @@ class SyncManager: ObservableObject {
         } else {
             qrString = ""
         }
-        print("[SyncManager] qrCodeData: \(qrString)")
+        clipLog("[SyncManager] qrCodeData: \(qrString)")
         return qrString
     }
 
@@ -467,16 +475,16 @@ class SyncManager: ObservableObject {
             do {
                 msg.content = try crypto.decrypt(msg.content, deviceId: msg.deviceId, messageType: msg.type.rawValue)
             } catch {
-                print("[SyncManager] Decryption failed: \(error), treating as plaintext")
+                clipLog("[SyncManager] Decryption failed: \(error), treating as plaintext")
                 // 不 return，继续用原始 content（可能是对端未加密的明文）
             }
         }
 
-        print("[SyncManager] ← received type=\(msg.type.rawValue) from=\(msg.deviceId) ts=\(msg.timestamp) lastSentTs=\(lastSentTimestamp)")
+        clipLog("[SyncManager] ← received type=\(msg.type.rawValue) from=\(msg.deviceId) ts=\(msg.timestamp) lastSentTs=\(lastSentTimestamp)")
 
         // 去重检查：忽略自己刚发出去的消息回环
         if msg.timestamp <= lastSentTimestamp && msg.deviceId == ProtocolConst.deviceId {
-            print("[SyncManager] ✗ dedup rejected self-echo")
+            clipLog("[SyncManager] ✗ dedup rejected self-echo")
             return
         }
 
@@ -549,13 +557,13 @@ class SyncManager: ObservableObject {
     private func handleLocalClipboardChange(text: String?, imageData: Data?, metadata: ClipboardImageMetadata?, fileURL: URL?) {
         // 级联防护：远端写入剪贴板触发的本地变化不应回传
         guard !isProcessingRemote else {
-            print("[SyncManager] local change suppressed (remote in progress)")
+            clipLog("[SyncManager] local change suppressed (remote in progress)")
             return
         }
 
         if let text = text {
             // 文字 → 自动发送（保持现有行为）
-            print("[SyncManager] → text copied, auto-sending...")
+            clipLog("[SyncManager] → text copied, auto-sending...")
             let timestamp = Date().timeIntervalSince1970
             lastSentTimestamp = timestamp
             let currentSSID = CWWiFiClient.shared().interface()?.ssid()
@@ -573,14 +581,14 @@ class SyncManager: ObservableObject {
             clearPendingContent()
         } else if let imageData = imageData, let meta = metadata {
             // 图片 → 暂存，等待用户手动发送
-            print("[SyncManager] → image copied, pending send: \(meta.fileSize / 1024)KB")
+            clipLog("[SyncManager] → image copied, pending send: \(meta.fileSize / 1024)KB")
             pendingImageData = imageData
             pendingImageMetadata = meta
             pendingFileURL = nil
             sendProgress = "准备发送图片 (\(meta.fileSize / 1024)KB, \(meta.width)×\(meta.height))"
         } else if let fileURL = fileURL {
             // 文件 → 暂存，等待用户手动发送
-            print("[SyncManager] → file copied, pending send: \(fileURL.lastPathComponent)")
+            clipLog("[SyncManager] → file copied, pending send: \(fileURL.lastPathComponent)")
             pendingFileURL = fileURL
             pendingImageData = nil
             pendingImageMetadata = nil
@@ -694,6 +702,13 @@ class SyncManager: ObservableObject {
         })
     }
 
+    /// 写入文本到 Mac 剪贴板（本地用途，如复制诊断日志）。
+    /// 走 writeText 路径（同步更新 changeCount），不会触发"本地复制 → 同步到手机"。
+    func copyTextLocally(_ text: String) {
+        clipboard.writeText(text)
+        clipLog("[SyncManager] copyTextLocally: \(text.count) chars written to local pasteboard (no sync)")
+    }
+
     /// 根据当前连接模式选择发送途径：LAN 优先，中继后备
     private func sendOrBroadcast(_ msg: SyncMessage) {
         var msg = msg
@@ -707,15 +722,20 @@ class SyncManager: ObservableObject {
                     messageType: msg.type.rawValue
                 )
             } catch {
-                print("[SyncManager] Encryption failed: \(error), dropping message")
+                clipLog("[SyncManager] Encryption failed: \(error), dropping message")
                 return
             }
         }
 
         if server.connectedCount > 0 {
+            clipLog("[SyncManager] → send via LAN (type=\(msg.type.rawValue) len=\(msg.content.count))")
             server.broadcast(msg)
         } else if wsClient.isConnected {
+            clipLog("[SyncManager] → send via RELAY (type=\(msg.type.rawValue) len=\(msg.content.count))")
             wsClient.sendRelay(msg)
+        } else {
+            // 两条通道都不可用：明确记录丢弃（此前静默丢弃，无法诊断"发送没效果"）
+            clipLog("[SyncManager] ✗ sendOrBroadcast DROPPED: no channel (lan=0, ws=false) type=\(msg.type.rawValue) len=\(msg.content.count)")
         }
     }
 
@@ -732,7 +752,7 @@ class SyncManager: ObservableObject {
     // MARK: - 剪贴板拉取（手机亮屏请求）
 
     private func handleClipboardPoll() {
-        print("[SyncManager] ← received clipboardPoll")
+        clipLog("[SyncManager] ← received clipboardPoll")
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             let pasteboard = NSPasteboard.general
@@ -748,7 +768,7 @@ class SyncManager: ObservableObject {
                     networkSSID: nil
                 )
                 self.sendOrBroadcast(msg)
-                print("[SyncManager] clipboardPoll: sending text (\(text.count) chars)")
+                clipLog("[SyncManager] clipboardPoll: sending text (\(text.count) chars)")
                 return
             }
 
@@ -770,7 +790,7 @@ class SyncManager: ObservableObject {
                     format: "jpeg"
                 )
                 self.sendOrBroadcast(msg)
-                print("[SyncManager] clipboardPoll: sending image (\(jpegData.count) bytes)")
+                clipLog("[SyncManager] clipboardPoll: sending image (\(jpegData.count) bytes)")
             }
         }
     }
@@ -809,7 +829,7 @@ class SyncManager: ObservableObject {
         let now = Date()
         let expired = transferBuffers.filter { now.timeIntervalSince($0.value.timestamp) > Self.chunkTimeout }
         for (id, _) in expired {
-            print("[SyncManager] Chunk transfer \(id) timed out, discarded")
+            clipLog("[SyncManager] Chunk transfer \(id) timed out, discarded")
             transferBuffers.removeValue(forKey: id)
         }
     }
@@ -819,7 +839,7 @@ class SyncManager: ObservableObject {
         guard let transferId = msg.transferId,
               let chunkIndex = msg.chunkIndex,
               let totalChunks = msg.totalChunks else {
-            print("[SyncManager] Invalid chunk message, missing transferId/chunkIndex/totalChunks")
+            clipLog("[SyncManager] Invalid chunk message, missing transferId/chunkIndex/totalChunks")
             return
         }
 
@@ -844,14 +864,14 @@ class SyncManager: ObservableObject {
         buffer.chunks[chunkIndex] = msg.content
         buffer.timestamp = Date()
 
-        print("[SyncManager] Chunk received: \(transferId.prefix(8))... [\(chunkIndex + 1)/\(totalChunks)], collected \(buffer.chunks.count)/\(totalChunks)")
+        clipLog("[SyncManager] Chunk received: \(transferId.prefix(8))... [\(chunkIndex + 1)/\(totalChunks)], collected \(buffer.chunks.count)/\(totalChunks)")
 
         if buffer.chunks.count == totalChunks {
             // 所有分片到齐，按序组装
             var fullBase64 = ""
             for i in 0..<totalChunks {
                 guard let chunk = buffer.chunks[i] else {
-                    print("[SyncManager] Missing chunk \(i) for transfer \(transferId), discarding")
+                    clipLog("[SyncManager] Missing chunk \(i) for transfer \(transferId), discarding")
                     transferBuffers.removeValue(forKey: transferId)
                     return
                 }
@@ -859,13 +879,13 @@ class SyncManager: ObservableObject {
             }
 
             guard let fullData = Data(base64Encoded: fullBase64) else {
-                print("[SyncManager] Failed to decode assembled base64 for transfer \(transferId)")
+                clipLog("[SyncManager] Failed to decode assembled base64 for transfer \(transferId)")
                 transferBuffers.removeValue(forKey: transferId)
                 return
             }
 
             transferBuffers.removeValue(forKey: transferId)
-            print("[SyncManager] Chunk assembly complete: \(transferId.prefix(8))..., \(fullData.count) bytes")
+            clipLog("[SyncManager] Chunk assembly complete: \(transferId.prefix(8))..., \(fullData.count) bytes")
 
             // 根据原始消息类型分发
             let metadata = buffer.metadata
@@ -889,7 +909,7 @@ class SyncManager: ObservableObject {
                 addRecord("[文件] \(metadata.fileName ?? "")", direction: .received)
                 sendReceivedNotification(preview: "📁 \(metadata.fileName ?? "文件")", filePath: savedPath)
             default:
-                print("[SyncManager] Unknown chunk base type: \(metadata.type.rawValue)")
+                clipLog("[SyncManager] Unknown chunk base type: \(metadata.type.rawValue)")
             }
         } else {
             transferBuffers[transferId] = buffer
@@ -916,7 +936,7 @@ class SyncManager: ObservableObject {
         let transferId = UUID().uuidString
         let totalChunks = Int(ceil(Double(rawData.count) / Double(Self.chunkSize)))
 
-        print("[SyncManager] Chunking \(rawData.count) bytes → \(totalChunks) chunks (transferId: \(transferId.prefix(8))...)")
+        clipLog("[SyncManager] Chunking \(rawData.count) bytes → \(totalChunks) chunks (transferId: \(transferId.prefix(8))...)")
 
         for i in 0..<totalChunks {
             let start = i * Self.chunkSize
@@ -1023,10 +1043,10 @@ class SyncManager: ObservableObject {
 
         do {
             try data.write(to: fileURL)
-            print("[SyncManager] File saved: \(fileURL.path)")
+            clipLog("[SyncManager] File saved: \(fileURL.path)")
             return fileURL.path
         } catch {
-            print("[SyncManager] Failed to write file: \(error)")
+            clipLog("[SyncManager] Failed to write file: \(error)")
             return nil
         }
     }

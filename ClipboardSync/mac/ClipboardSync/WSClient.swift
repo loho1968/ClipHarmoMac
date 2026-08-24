@@ -61,23 +61,23 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     /// 连接并认证到中继服务器
     func connect(to url: URL, roomKey: String) {
         if isConnected || isConnecting {
-            print("[WSClient]connect() skipped: already connected/connecting")
+            clipLog("[WSClient]connect() skipped: already connected/connecting")
             return
         }
         self.targetURL = url
         self.roomKey = roomKey
         self.shouldReconnect = true
-        print("[WSClient]Connecting to \(url.absoluteString) with roomKey=\(roomKey)")
+        clipLog("[WSClient]Connecting to \(url.absoluteString) with roomKey=\(roomKey)")
         doConnect(url: url)
     }
 
     /// 强制重连（网络恢复后调用），重置重试计数器并立即连接
     func forceReconnect() {
         guard let url = targetURL, !roomKey.isEmpty else {
-            print("[WSClient] forceReconnect() skipped: missing url or roomKey")
+            clipLog("[WSClient] forceReconnect() skipped: missing url or roomKey")
             return
         }
-        print("[WSClient] forceReconnect() to \(url.absoluteString)")
+        clipLog("[WSClient] forceReconnect() to \(url.absoluteString)")
         cleanup()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil
@@ -89,7 +89,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
 
     /// 断开连接（取消重连）
     func disconnect() {
-        print("[WSClient]disconnect()")
+        clipLog("[WSClient]disconnect()")
         shouldReconnect = false
         cleanup()
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
@@ -102,7 +102,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     /// 通过中继发送剪贴板消息
     func sendRelay(_ message: SyncMessage) {
         guard isConnected else {
-            print("[WSClient] sendRelay() failed: not connected")
+            clipLog("[WSClient] sendRelay() failed: not connected")
             return
         }
         let relayMsg = RelayMessage.clientRelay(
@@ -125,9 +125,9 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func doConnect(url: URL) {
         isConnecting = true
         connectionMode = .connecting
-        print("[WSClient] ═══ doConnect ═══")
-        print("[WSClient]   url = \(url.absoluteString)")
-        print("[WSClient]   roomKey = \(roomKey)")
+        clipLog("[WSClient] ═══ doConnect ═══")
+        clipLog("[WSClient]   url = \(url.absoluteString)")
+        clipLog("[WSClient]   roomKey = \(roomKey)")
         // 显式设置 WebSocket 握手头，防止 URLSessionWebSocketTask 在某些
         // macOS 版本（如 Darwin 25.x）上漏发 Upgrade/Connection 头
         var request = URLRequest(url: url)
@@ -145,7 +145,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     func urlSession(_ session: URLSession,
                     webSocketTask: URLSessionWebSocketTask,
                     didOpenWithProtocol proto: String?) {
-        print("[WSClient] WebSocket opened, protocol: \(proto ?? "none"), sending auth...")
+        clipLog("[WSClient] WebSocket opened, protocol: \(proto ?? "none"), sending auth...")
         let authMsg = RelayMessage.clientAuth(roomKey: roomKey, deviceId: ProtocolConst.deviceId)
         sendJSON(authMsg)
     }
@@ -155,7 +155,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
                     webSocketTask: URLSessionWebSocketTask,
                     didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
                     reason: Data?) {
-        print("[WSClient] WebSocket closed: code=\(closeCode.rawValue)")
+        clipLog("[WSClient] WebSocket closed: code=\(closeCode.rawValue)")
         // 防止与 receive 回调中的 handleDisconnect 重复触发
         guard isConnected || isConnecting else { return }
         handleDisconnect(error: nil)
@@ -164,13 +164,13 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func sendJSON(_ message: RelayMessage) {
         guard let data = try? JSONEncoder().encode(message),
               let jsonStr = String(data: data, encoding: .utf8) else {
-            print("[WSClient] Failed to encode RelayMessage")
+            clipLog("[WSClient] Failed to encode RelayMessage")
             return
         }
         let wsMsg = URLSessionWebSocketTask.Message.string(jsonStr)
         webSocketTask?.send(wsMsg) { [weak self] error in
             if let error = error {
-                print("[WSClient]Send error: \(error.localizedDescription)")
+                clipLog("[WSClient]Send error: \(error.localizedDescription)")
                 self?.handleDisconnect(error: error)
             }
         }
@@ -193,7 +193,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
                 }
                 self.startReceiving()  // 递归接收下一条
             case .failure(let error):
-                print("[WSClient]Receive failed: \(error.localizedDescription)")
+                clipLog("[WSClient]Receive failed: \(error.localizedDescription)")
                 self.handleDisconnect(error: error)
             }
         }
@@ -202,7 +202,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     private func handleTextMessage(_ text: String) {
         guard let data = text.data(using: .utf8),
               let msg = try? JSONDecoder().decode(RelayMessage.self, from: data) else {
-            print("[WSClient] Failed to decode relay message")
+            clipLog("[WSClient] Failed to decode relay message")
             return
         }
         routeMessage(msg)
@@ -214,27 +214,27 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
         case RelayAction.authOk.rawValue:
             let pid = msg.pairedDeviceId
             let roomCount = msg.roomDeviceCount
-            print("[WSClient] ═══ AUTH_OK received ═══")
-            print("[WSClient]   pairedDeviceId = \(pid ?? "nil")")
-            print("[WSClient]   roomDeviceCount = \(roomCount ?? -1)")
-            print("[WSClient]   isRetrying = \(isRetrying)")
+            clipLog("[WSClient] ═══ AUTH_OK received ═══")
+            clipLog("[WSClient]   pairedDeviceId = \(pid ?? "nil")")
+            clipLog("[WSClient]   roomDeviceCount = \(roomCount ?? -1)")
+            clipLog("[WSClient]   isRetrying = \(isRetrying)")
             isConnected = true
             isConnecting = false
             reconnectAttempt = 0
             pairedDeviceId = pid
             let mode: ConnectionMode = (pid != nil) ? .paired : .waitingForPair
             connectionMode = mode
-            print("[WSClient]   → mode = \(mode)")
+            clipLog("[WSClient]   → mode = \(mode)")
             startHeartbeat()
 
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.onAuthResult?(true, self.pairedDeviceId)
                 if let pid = pid {
-                    print("[WSClient]   → calling onPaired(\(pid))")
+                    clipLog("[WSClient]   → calling onPaired(\(pid))")
                     self.onPaired?(pid)
                 }
-                print("[WSClient]   → calling onConnected()")
+                clipLog("[WSClient]   → calling onConnected()")
                 self.onConnected?()
             }
 
@@ -268,26 +268,26 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
 
         case RelayAction.error.rawValue:
             let errorMsg = msg.message ?? "未知中继错误"
-            print("[WSClient]Server error: \(errorMsg)")
+            clipLog("[WSClient]Server error: \(errorMsg)")
             DispatchQueue.main.async { [weak self] in
                 self?.onError?(errorMsg)
             }
 
         default:
-            print("[WSClient] Unknown action: \(msg.action)")
+            clipLog("[WSClient] Unknown action: \(msg.action)")
         }
     }
 
     private func handleDisconnect(error: Error?) {
         // 防止 didClose delegate 与 receive error 重复触发
         guard isConnected || isConnecting else {
-            print("[WSClient] handleDisconnect ignored: already disconnected (isConnected=\(isConnected), isConnecting=\(isConnecting))")
+            clipLog("[WSClient] handleDisconnect ignored: already disconnected (isConnected=\(isConnected), isConnecting=\(isConnecting))")
             return
         }
-        print("[WSClient] ═══ Disconnected ═══")
-        print("[WSClient]   error = \(error?.localizedDescription ?? "normal")")
-        print("[WSClient]   shouldReconnect = \(self.shouldReconnect)")
-        print("[WSClient]   reconnectAttempt = \(self.reconnectAttempt)")
+        clipLog("[WSClient] ═══ Disconnected ═══")
+        clipLog("[WSClient]   error = \(error?.localizedDescription ?? "normal")")
+        clipLog("[WSClient]   shouldReconnect = \(self.shouldReconnect)")
+        clipLog("[WSClient]   reconnectAttempt = \(self.reconnectAttempt)")
         isConnected = false
         isConnecting = false
         stopHeartbeat()
@@ -330,7 +330,7 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
             RelayConfig.reconnectMaxDelay
         )
         reconnectAttempt += 1
-        print("[WSClient]Reconnect in \(Int(delay))s (attempt \(self.reconnectAttempt))")
+        clipLog("[WSClient]Reconnect in \(Int(delay))s (attempt \(self.reconnectAttempt))")
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }

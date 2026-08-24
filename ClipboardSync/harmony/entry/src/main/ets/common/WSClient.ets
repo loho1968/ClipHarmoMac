@@ -2,11 +2,23 @@ import { webSocket } from '@kit.NetworkKit'
 import { SyncMessage, RelayConfig, RelayAction, RelayMessage, ProtocolConst } from './Protocol'
 import { BusinessError } from '@kit.BasicServicesKit'
 import { util } from '@kit.ArkTS'
+import { hilog } from '@kit.PerformanceAnalysisKit'
+
+const TAG: string = 'ClipHarmoMac'
+const DOMAIN: number = 0x0000
 
 /**
  * WebSocket 中继客户端
  * 使用 @kit.NetworkKit webSocket 模块
  * 负责连接/认证/心跳/重连/消息收发
+ *
+ * 假连接检测（重要）：
+ * 息屏后系统可能休眠网络，服务器 60s 心跳超时会踢掉本端，
+ * 但本地 socket 变成"半开"状态收不到 close 事件，isConnected 永远为 true，
+ * 所有消息静默丢失（表现为"显示已连接但发什么都没效果"）。
+ * 因此心跳必须双向校验：
+ * 1. 发送失败连续 2 次 → 判死
+ * 2. 超过 3 个心跳周期（90s）未收到服务器任何消息 → 判死
  */
 export class WSClient {
 
@@ -38,6 +50,12 @@ export class WSClient {
   private pairedDeviceId: string = ''
   private mode: string = WSClient.CONNECTION_MODE_DISCONNECTED
 
+  // ==== 假连接检测状态 ====
+  /// 最近一次收到服务器消息的时间戳（ms）——任何消息都代表服务器可达
+  private lastServerActivityMs: number = 0
+  /// 连续发送失败次数（收到服务器消息即清零）
+  private sendFailCount: number = 0
+
   get connected(): boolean {
     return this.isConnected
   }
@@ -57,18 +75,18 @@ export class WSClient {
    */
   connect(url: string, roomKey: string): void {
     if (this.isConnected || this.isConnecting) {
-      console.info('[WSClient] connect() skipped: already connected/connecting')
+      hilog.error(DOMAIN, TAG, `[WS] connect() skipped: already connected/connecting (isConnected=${this.isConnected})`)
       return
     }
     this.targetUrl = url
     this.roomKey = roomKey
     this.shouldReconnect = true
-    console.info('[WSClient] Connecting to ' + url + ' with roomKey=' + roomKey)
+    hilog.error(DOMAIN, TAG, `[WS] Connecting to ${url} roomKey=${roomKey}`)
     this.doConnect(url)
   }
 
   disconnect(): void {
-    console.info('[WSClient] disconnect()')
+    hilog.error(DOMAIN, TAG, `[WS] disconnect()`)
     this.shouldReconnect = false
     this.cleanup()
     this.closeSocket()
@@ -77,7 +95,7 @@ export class WSClient {
   }
 
   forceReconnect(url: string, roomKey: string): void {
-    console.info('[WSClient] forceReconnect() to ' + url)
+    hilog.error(DOMAIN, TAG, `[WS] forceReconnect() to ${url} (wasConnected=${this.isConnected})`)
     this.shouldReconnect = true
     this.targetUrl = url
     this.roomKey = roomKey
@@ -98,7 +116,7 @@ export class WSClient {
    */
   sendRelay(msg: SyncMessage): boolean {
     if (!this.ws || !this.isConnected) {
-      console.error('[WSClient] sendRelay() failed: not connected')
+      hilog.error(DOMAIN, TAG, `[WS] sendRelay FAILED: not connected (type=${msg.type})`)
       return false
     }
     const relayMsg: RelayMessage = {
@@ -109,9 +127,13 @@ export class WSClient {
     }
     const jsonStr = JSON.stringify(relayMsg)
     this.ws.send(jsonStr).then(() => {
-      console.info('[WSClient] Relay sent')
+      hilog.error(DOMAIN, TAG, `[WS] Relay sent OK (type=${msg.type} len=${msg.content.length})`)
     }).catch((err: BusinessError) => {
-      console.error('[WSClient] Relay send failed: ' + err.code)
+      this.sendFailCount++
+      hilog.error(DOMAIN, TAG, `[WS] Relay send FAILED: code=${err.code} failCount=${this.sendFailCount} (type=${msg.type})`)
+      if (this.sendFailCount >= 2) {
+        this.handleDeadConnection(`send failed ${this.sendFailCount} times in a row`)
+      }
     })
     return true
   }
@@ -127,8 +149,14 @@ export class WSClient {
       action: RelayAction.PING,
       deviceId: ProtocolConst.DEVICE_ID
     }
-    this.ws.send(JSON.stringify(pingMsg)).catch((_err: BusinessError) => {
-      // ignore
+    this.ws.send(JSON.stringify(pingMsg)).then(() => {
+      // 发送成功不代表对端收到，真正的判活依据是 lastServerActivityMs
+    }).catch((err: BusinessError) => {
+      this.sendFailCount++
+      hilog.error(DOMAIN, TAG, `[WS] ping send FAILED: code=${err.code} failCount=${this.sendFailCount}`)
+      if (this.sendFailCount >= 2) {
+        this.handleDeadConnection(`ping failed ${this.sendFailCount} times in a row`)
+      }
     })
   }
 
@@ -141,7 +169,7 @@ export class WSClient {
     this.ws = webSocket.createWebSocket()
 
     this.ws.on('open', (_err: BusinessError, _value: Object) => {
-      console.info('[WSClient] WebSocket opened')
+      hilog.error(DOMAIN, TAG, `[WS] WebSocket opened, sending auth...`)
       // 发送 auth 消息
       const authMsg: RelayMessage = {
         action: RelayAction.AUTH,
@@ -149,7 +177,7 @@ export class WSClient {
         deviceId: ProtocolConst.DEVICE_ID
       }
       this.ws!.send(JSON.stringify(authMsg)).catch((err: BusinessError) => {
-        console.error('[WSClient] Auth send failed: ' + err.code)
+        hilog.error(DOMAIN, TAG, `[WS] Auth send failed: code=${err.code}`)
       })
     })
 
@@ -158,31 +186,25 @@ export class WSClient {
     })
 
     this.ws.on('close', (_err: BusinessError, closeValue: webSocket.CloseResult) => {
-      console.info('[WSClient] WebSocket closed, code=' + closeValue.code)
-      this.isConnected = false
-      this.isConnecting = false
-      this.clearHeartbeat()
-      if (this.shouldReconnect) {
-        this.scheduleReconnect()
-      }
-      const newMode = this.shouldReconnect ?
-        WSClient.CONNECTION_MODE_CONNECTING : WSClient.CONNECTION_MODE_DISCONNECTED
-      this.mode = newMode
-      this.onDisconnected?.()
-      this.onStatusChange?.(this.mode)
+      hilog.error(DOMAIN, TAG, `[WS] WebSocket closed: code=${closeValue.code} reason=${closeValue.reason}`)
+      this.handleConnectionLost(`close code=${closeValue.code}`)
     })
 
     this.ws.on('error', (err: BusinessError) => {
-      console.error('[WSClient] WebSocket error: code=' + err.code)
-      this.isConnected = false
-      this.isConnecting = false
+      hilog.error(DOMAIN, TAG, `[WS] WebSocket ERROR: code=${err.code} msg=${err.message}`)
       this.onError?.('WebSocket error: ' + err.code)
+      // error 事件同样意味着连接不可用（连接失败/连接中断都会触发），
+      // 必须走统一的断线重连流程，否则会卡在 connecting 状态不再重试
+      this.handleConnectionLost(`error code=${err.code}`)
     })
 
     this.ws.connect(url)
   }
 
   private handleMessage(value: string | ArrayBuffer): void {
+    // 收到任何服务器消息 = 通道活着，刷新假连接检测状态
+    this.lastServerActivityMs = Date.now()
+    this.sendFailCount = 0
     try {
       let text = ''
       if (typeof value === 'string') {
@@ -210,6 +232,7 @@ export class WSClient {
         this.pairedDeviceId = msg.pairedDeviceId || ''
         this.mode = (msg.pairedDeviceId) ?
           WSClient.CONNECTION_MODE_PAIRED : WSClient.CONNECTION_MODE_WAITING_FOR_PAIR
+        hilog.error(DOMAIN, TAG, `[WS] AUTH_OK: paired=${this.pairedDeviceId || '(waiting)'} roomCount=${msg.roomDeviceCount}`)
         this.startHeartbeat()
         this.onAuthResult?.(true, msg.pairedDeviceId || null)
         if (msg.pairedDeviceId) {
@@ -227,6 +250,7 @@ export class WSClient {
 
       case RelayAction.PAIRED:
         if (msg.pairedDeviceId) {
+          hilog.error(DOMAIN, TAG, `[WS] PAIRED: peer ${msg.pairedDeviceId} joined room`)
           this.pairedDeviceId = msg.pairedDeviceId
           this.mode = WSClient.CONNECTION_MODE_PAIRED
           this.onPaired?.(msg.pairedDeviceId)
@@ -235,6 +259,7 @@ export class WSClient {
         break
 
       case RelayAction.PEER_GONE:
+        hilog.error(DOMAIN, TAG, `[WS] PEER_GONE: peer ${msg.fromDeviceId || '?'} left room (mac offline/kicked)`)
         this.pairedDeviceId = ''
         this.mode = WSClient.CONNECTION_MODE_WAITING_FOR_PAIR
         if (msg.fromDeviceId) {
@@ -244,9 +269,10 @@ export class WSClient {
         break
 
       case RelayAction.PONG:
-        break  // 心跳响应，无需处理
+        break  // 心跳响应（lastServerActivityMs 已在 handleMessage 刷新）
 
       case RelayAction.ERROR:
+        hilog.error(DOMAIN, TAG, `[WS] server ERROR: ${msg.message}`)
         this.onError?.(msg.message || '未知中继错误')
         break
 
@@ -255,11 +281,67 @@ export class WSClient {
     }
   }
 
+  // ========== 断线统一处理 ==========
+
+  /**
+   * 连接丢失（close/error 事件触发）——统一入口，防止重复触发
+   */
+  private handleConnectionLost(reason: string): void {
+    // 守卫：已经处于断开状态则跳过（close + error 双事件、重复回调场景）
+    if (!this.isConnected && !this.isConnecting) {
+      hilog.error(DOMAIN, TAG, `[WS] handleConnectionLost ignored (already disconnected): ${reason}`)
+      return
+    }
+    hilog.error(DOMAIN, TAG, `[WS] ═══ connection LOST: ${reason} ═══`)
+    this.isConnected = false
+    this.isConnecting = false
+    this.clearHeartbeat()
+    if (this.shouldReconnect) {
+      this.scheduleReconnect()
+    }
+    this.mode = this.shouldReconnect ?
+      WSClient.CONNECTION_MODE_CONNECTING : WSClient.CONNECTION_MODE_DISCONNECTED
+    this.onDisconnected?.()
+    this.onStatusChange?.(this.mode)
+  }
+
+  /**
+   * 检测到假连接（本地认为已连接，但服务器早已断开/踢人）：
+   * 发送连续失败 或 长时间收不到服务器任何消息。
+   * 主动关闭死 socket 并立即走重连流程。
+   */
+  private handleDeadConnection(reason: string): void {
+    hilog.error(DOMAIN, TAG, `[WS] ☠️ DEAD connection detected: ${reason} — forcing reconnect`)
+    // closeSocket 会 off 所有监听，主动 close 不会触发 close 事件，
+    // 所以这里直接走断线流程（绕过 handleConnectionLost 的守卫）
+    this.closeSocket()
+    this.isConnected = false
+    this.isConnecting = false
+    this.clearHeartbeat()
+    if (this.shouldReconnect) {
+      this.scheduleReconnect()
+    }
+    this.mode = this.shouldReconnect ?
+      WSClient.CONNECTION_MODE_CONNECTING : WSClient.CONNECTION_MODE_DISCONNECTED
+    this.onDisconnected?.()
+    this.onStatusChange?.(this.mode)
+  }
+
   // ========== 心跳 ==========
 
   private startHeartbeat(): void {
     this.clearHeartbeat()
+    // 初始化服务器活跃时间（auth_ok 刚收到）
+    this.lastServerActivityMs = Date.now()
+    this.sendFailCount = 0
     this.heartbeatTimerId = setInterval(() => {
+      // 假连接判活：超过 3 个心跳周期（90s）未收到服务器任何消息（含 pong），
+      // 说明连接早已死亡（典型场景：息屏后被服务器踢掉、半开连接）
+      const silentMs: number = Date.now() - this.lastServerActivityMs
+      if (silentMs > RelayConfig.HEARTBEAT_INTERVAL * 3) {
+        this.handleDeadConnection(`no server activity for ${Math.floor(silentMs / 1000)}s`)
+        return
+      }
       this.sendPing()
     }, RelayConfig.HEARTBEAT_INTERVAL) as number
   }
@@ -283,7 +365,7 @@ export class WSClient {
       RelayConfig.RECONNECT_MAX_DELAY
     )
     this.reconnectAttempt += 1
-    console.info('[WSClient] Reconnect in ' + delay + 'ms (attempt ' + this.reconnectAttempt + ')')
+    hilog.error(DOMAIN, TAG, `[WS] Reconnect in ${delay}ms (attempt ${this.reconnectAttempt})`)
     this.reconnectTimerId = setTimeout(() => {
       if (this.shouldReconnect) {
         this.closeSocket()

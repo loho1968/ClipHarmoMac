@@ -6,6 +6,9 @@ struct MainView: View {
     @State private var editHostText: String = ""
     @State private var showQRCode: Bool = false
     @State private var showLANQRCode: Bool = false
+    // 诊断日志
+    @State private var showLogDetail: Bool = false
+    @State private var logText: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +25,9 @@ struct MainView: View {
 
             // 云中继配对卡片
             relayCard
+
+            // 诊断日志卡片（查看 / 复制 / 清除）
+            logCard
 
             Divider()
 
@@ -619,6 +625,100 @@ struct MainView: View {
         case .connected: return .green
         case .discovering: return .orange
         case .disconnected: return .gray
+        }
+    }
+
+    // MARK: - 诊断日志卡片
+
+    private var logCard: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                Text("诊断日志")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                Spacer()
+                // 刷新
+                Button {
+                    refreshLog()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .help("刷新日志")
+                // 复制（写入 Mac 剪贴板，不会同步到手机）
+                Button {
+                    copyLog()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .help("复制全部日志（可直接粘贴发给别人分析）")
+                // 清除
+                Button {
+                    LogManager.shared.clear()
+                    logText = ""
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.borderless)
+                .help("清除日志")
+                // 展开/收起
+                Button {
+                    withAnimation {
+                        showLogDetail.toggle()
+                        if showLogDetail { refreshLog() }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11))
+                        .rotationEffect(.degrees(showLogDetail ? 180 : 0))
+                }
+                .buttonStyle(.borderless)
+                .help(showLogDetail ? "收起日志" : "展开日志")
+            }
+
+            if showLogDetail {
+                ScrollView {
+                    Text(logText.isEmpty ? "（暂无日志）" : logText)
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                        .padding(6)
+                }
+                .frame(height: 150)
+                .background(Color(nsColor: .textBackgroundColor))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
+                .cornerRadius(6)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .onAppear {
+            if showLogDetail { refreshLog() }
+        }
+    }
+
+    private func refreshLog() {
+        logText = LogManager.shared.allText
+    }
+
+    /// 复制日志到 Mac 剪贴板。
+    /// 走 clipboard.writeText（更新 changeCount），不会触发"本地复制 → 同步到手机"。
+    private func copyLog() {
+        refreshLog()
+        let text = logText
+        if !text.isEmpty {
+            syncManager.copyTextLocally(text)
         }
     }
 

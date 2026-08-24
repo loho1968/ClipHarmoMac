@@ -4,8 +4,11 @@ import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { notificationManager } from '@kit.NotificationKit'
 import { getSharedSyncManager, SyncStatus, ConnectionMode } from '../model/SyncManager'
 import { RelayConfig } from '../common/Protocol'
+import { hilog } from '@kit.PerformanceAnalysisKit'
 
 const NOTIFICATION_ID: number = 1001
+const TAG: string = 'ClipHarmoMac'
+const DOMAIN: number = 0x0000
 
 export default class EntryAbility extends UIAbility {
   private isBackgroundRunning: boolean = false
@@ -51,11 +54,13 @@ export default class EntryAbility extends UIAbility {
   }
 
   onForeground(): void {
+    hilog.error(DOMAIN, TAG, `[LC] ▶️ EntryAbility onForeground at ${new Date().toLocaleTimeString()}`)
     console.info('[ClipboardSync] ▶️ onForeground at ' + new Date().toLocaleTimeString())
     getSharedSyncManager().onAppForeground()
   }
 
   onBackground(): void {
+    hilog.error(DOMAIN, TAG, `[LC] ⏸️ EntryAbility onBackground at ${new Date().toLocaleTimeString()}`)
     console.info('[ClipboardSync] ⏸️ onBackground at ' + new Date().toLocaleTimeString())
     void this.startBackgroundRunning()
   }

@@ -15,6 +15,11 @@ import { SaveDirectoryManager } from '../model/SaveDirectoryManager'
 import { photoAccessHelper } from '@kit.MediaLibraryKit'
 import { Want } from '@kit.AbilityKit'
 import { CryptoModule } from '../common/CryptoModule'
+import { hilog } from '@kit.PerformanceAnalysisKit'
+
+// 诊断日志 tag/domain（hilog 抓取：hilog | grep ClipHarmoMac）
+const TAG: string = 'ClipHarmoMac'
+const DOMAIN: number = 0x0000
 
 // 同步记录
 export interface SyncRecord {
@@ -632,6 +637,7 @@ export class SyncManager {
   // ============ 接收远端消息 ============
 
   private async handleRemoteMessage(msg: SyncMessage): Promise<void> {
+    hilog.error(DOMAIN, TAG, `[RX] ←←← handleRemoteMessage: type=${msg.type} contentLen=${msg.content.length} from=${msg.deviceId}`)
     console.info('[SyncManager] ←←← handleRemoteMessage: type=' + msg.type + ' contentLen=' + msg.content.length)
     let decryptedMsg = msg
 
@@ -676,6 +682,7 @@ export class SyncManager {
           fileCount: msg.fileCount
         }
       } catch (e) {
+        hilog.error(DOMAIN, TAG, `[RX] ✗ Decryption FAILED: ${JSON.stringify(e)} type=${msg.type} — treating as plaintext (roomKey mismatch or peer sent plaintext)`)
         console.error('[SyncManager] Decryption failed: ' + JSON.stringify(e) + ', treating as plaintext')
         // 不 return，继续用原始 decryptedMsg（兼容未加密的对端）
       }
@@ -924,6 +931,7 @@ export class SyncManager {
    * 连接建立后 + 从后台切回前台时调用，发送缓存或重新读取剪贴板
    */
   onAppForeground(): void {
+    hilog.error(DOMAIN, TAG, `[FG] ═══ onAppForeground ═══ dirty=${this._clipboardDirty} cachedLen=${this._cachedClipboardText.length} tcp=${this.tcpClient.connected} ws=${this.wsClient.connected} wsMode=${this.wsClient.currentMode}`)
     console.info('[SyncManager] onAppForeground: dirty=' + this._clipboardDirty + ' cachedLen=' + this._cachedClipboardText.length)
     const isFirstLaunch = this.lastChangeCount < 0
     try {
@@ -997,6 +1005,13 @@ export class SyncManager {
       if (profile && profile.macIP.length > 0) {
         console.info('[SyncManager] Wakeup: reconnecting TCP to ' + profile.macIP)
         this.setupTcpClient(profile.macIP)
+        // 修复：不能直接 return——若 WS 也断开了（息屏被服务器踢掉）必须同步恢复中继，
+        // 否则 TCP 连不上（Mac 不在此网段）时将无任何可用通道（表现为"已连接但发不通"）
+        if (!this.wsClient.connected && this._roomKey.length > 0) {
+          const wsUrl = RelayConfig.buildURL(this._relayServerHost)
+          hilog.error(DOMAIN, TAG, `[Wakeup] WS not connected, also reconnecting relay: ${wsUrl}`)
+          this.wsClient.forceReconnect(wsUrl, this._roomKey)
+        }
         return
       }
     }
@@ -1019,6 +1034,7 @@ export class SyncManager {
       deviceId: ProtocolConst.DEVICE_ID
     }
     void this.sendMsg(msg)
+    hilog.error(DOMAIN, TAG, `[TX] requestRemoteClipboard: sent CLIPBOARD_POLL (tcp=${this.tcpClient.connected} ws=${this.wsClient.connected})`)
     console.info('[SyncManager] requestRemoteClipboard: sent CLIPBOARD_POLL')
   }
 
@@ -1075,6 +1091,7 @@ export class SyncManager {
         this.pollTickCount = 0
         const tcpOk: boolean = this.tcpClient.connected
         const wsOk: boolean = this.wsClient.connected
+        hilog.error(DOMAIN, TAG, `[BG] ☀️ screen WOKE UP (off ~${offDuration}s): tcp=${tcpOk} ws=${wsOk} wsMode=${this.wsClient.currentMode} — forcing reconnect check`)
         console.info('[SyncManager] ☀️ bgPoll: screen WOKE UP at ' +
           new Date().toLocaleTimeString() +
           ' (off ~' + offDuration + 's)' +
@@ -1141,6 +1158,7 @@ export class SyncManager {
     if (text.length === 0) {
       return
     }
+    hilog.error(DOMAIN, TAG, `[UI] manualSendText: len=${text.length} tcp=${this.tcpClient.connected} ws=${this.wsClient.connected}`)
     if (!this.tcpClient.connected && !this.wsClient.connected) {
       // 未连接时缓存文本，连接建立后由 flushPendingClipboard() 自动发送
       console.info('[SyncManager] manualSendText: not connected, caching for later: len=' + text.length)
@@ -1157,6 +1175,7 @@ export class SyncManager {
   private sendClipboardText(text: string): void {
     const timestamp = Date.now() / 1000
     this.lastSentTimestamp = timestamp
+    hilog.error(DOMAIN, TAG, `[TX] sendClipboardText: len=${text.length} preview="${text.substring(0, 30)}" tcp=${this.tcpClient.connected} ws=${this.wsClient.connected}`)
     console.info('[SyncManager] sendClipboardText: len=' + text.length + ' tcp=' + this.tcpClient.connected + ' ws=' + this.wsClient.connected)
 
     const msg: SyncMessage = {
@@ -1241,6 +1260,7 @@ export class SyncManager {
 
   writeClipboardText(text: string): void {
     this.isRemoteUpdate = true
+    hilog.error(DOMAIN, TAG, `[RX] →→→ writeClipboardText (remote→local): len=${text.length} preview="${text.substring(0, 30)}"`)
     console.info('[SyncManager] writeClipboardText (remote): len=' + text.length)
     try {
       const data = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text)
