@@ -2,8 +2,8 @@ import Foundation
 
 /// 通信协议常量
 enum ProtocolConst {
-    /// 应用版本号
-    static let appVersion = "1.0.0 (build 1)"
+    /// 应用版本号（每次发版修改，面板底部会显示）
+    static let appVersion = "1.1.0 (build 2)"
     /// UDP 广播端口
     static let broadcastPort: UInt16 = 19876
     /// TCP 数据服务端口
@@ -161,6 +161,8 @@ enum RelayAction: String {
     case paired = "paired"
     case peerGone = "peer_gone"
     case error = "error"
+    /// 服务端回执：发送的房间内无其他设备，消息未被任何人收到
+    case relayNoPeer = "relay_no_peer"
 }
 
 /// 中继层消息（WebSocket JSON 协议）
@@ -174,6 +176,8 @@ struct RelayMessage: Codable {
     let payload: SyncMessage?
     let message: String?
     let roomDeviceCount: Int?
+    /// relay_no_peer 回执携带：被丢弃的消息类型
+    let type: String?
 
     // MARK: 客户端→服务端 便捷构造
 
@@ -187,7 +191,8 @@ struct RelayMessage: Codable {
             pairedDeviceId: nil,
             payload: nil,
             message: nil,
-            roomDeviceCount: nil
+            roomDeviceCount: nil,
+            type: nil
         )
     }
 
@@ -201,7 +206,8 @@ struct RelayMessage: Codable {
             pairedDeviceId: nil,
             payload: payload,
             message: nil,
-            roomDeviceCount: nil
+            roomDeviceCount: nil,
+            type: nil
         )
     }
 
@@ -215,7 +221,8 @@ struct RelayMessage: Codable {
             pairedDeviceId: nil,
             payload: nil,
             message: nil,
-            roomDeviceCount: nil
+            roomDeviceCount: nil,
+            type: nil
         )
     }
 }

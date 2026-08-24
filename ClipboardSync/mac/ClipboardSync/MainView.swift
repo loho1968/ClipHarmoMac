@@ -82,7 +82,13 @@ struct MainView: View {
                                 .foregroundColor(.green)
                         }
                     } else if syncManager.status == .discovering {
-                        if syncManager.relayStatusText.contains("未配置中继")
+                        if syncManager.relayStatusText.contains("等待设备加入")
+                            || syncManager.relayStatusText.contains("未被送达") {
+                            // 传输层已连上中继，但房间内无对端（典型：两端配对码不一致）
+                            Text("云中继已连接 · 房间内暂无其他设备，检查两端配对码是否一致")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                        } else if syncManager.relayStatusText.contains("未配置中继")
                             || syncManager.relayStatusText.contains("中继已断开")
                             || syncManager.relayStatusText.contains("中继重连中")
                             || syncManager.relayStatusText.contains("中继错误") {
@@ -531,13 +537,25 @@ struct MainView: View {
     @ViewBuilder
     private var relayModeIndicator: some View {
         if syncManager.connectionMode == .relay {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-                Text("中继在线")
-                    .font(.system(size: 10))
-                    .foregroundColor(.green)
+            if syncManager.relayPairedDeviceId != nil {
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 6, height: 6)
+                    Text("中继在线")
+                        .font(.system(size: 10))
+                        .foregroundColor(.green)
+                }
+            } else {
+                // 传输层在线但房间内无对端：不算真正的"在线"
+                HStack(spacing: 4) {
+                    Circle()
+                        .fill(Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text("等待设备加入")
+                        .font(.system(size: 10))
+                        .foregroundColor(.orange)
+                }
             }
         } else if syncManager.connectionMode == .lan {
             HStack(spacing: 4) {

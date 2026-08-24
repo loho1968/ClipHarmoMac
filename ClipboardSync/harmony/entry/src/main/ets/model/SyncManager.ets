@@ -384,6 +384,14 @@ export class SyncManager {
 
     this.networkCtx.onNetworkLost = () => {
       console.info('[SyncManager] WiFi disconnected')
+      // WiFi 丢失后局域网 IP 不可达（蜂窝网络无法路由 192.168.x.x），
+      // 停掉 TCPClient 的无限重连循环，避免每 15 秒刷一次 Connect failed 日志；
+      // 回到已记住的 WiFi 时 onNetworkMatched 会自动重建 TCP 连接
+      if (!this.tcpClient.connected) {
+        console.info('[SyncManager] WiFi lost: stopping LAN TCP reconnect loop')
+        this.tcpClient.disconnect()
+        this._connectingIp = ''
+      }
       // 确保中继连接活跃（5G/蜂窝网络下唯一的数据通道）
       if (!this.wsClient.connected && this._roomKey.length > 0) {
         console.info('[SyncManager] WiFi lost, reconnecting relay with saved roomKey')
@@ -458,7 +466,7 @@ export class SyncManager {
       this._relayPairedDeviceId = this.wsClient.currentPairedDeviceId
       this._relayStatusText = this.wsClient.currentPairedDeviceId.length > 0
         ? '已配对: ' + this.wsClient.currentPairedDeviceId
-        : '等待设备加入...'
+        : '已连中继，等待 Mac 加入（配对码 ' + this._roomKey + '）'
       this.onStateChange?.()
 
       if (!this.tcpClient.connected) {
@@ -504,6 +512,14 @@ export class SyncManager {
     this.wsClient.onPeerGone = (_deviceId: string) => {
       this._relayPairedDeviceId = ''
       this._relayStatusText = '配对设备已离线'
+      this.onStateChange?.()
+    }
+
+    this.wsClient.onNoPeer = (droppedType: string) => {
+      console.error('[SyncManager] onNoPeer: ' + droppedType + ' 未被送达（房间内无其他设备）')
+      this._relayPairedDeviceId = ''
+      this._relayStatusText = '房间内无设备，' + droppedType + ' 未被送达（当前配对码 ' +
+        this._roomKey + '，请与 Mac 端核对）'
       this.onStateChange?.()
     }
 
@@ -899,12 +915,15 @@ export class SyncManager {
       }
       const text = this.extractText(data)
       console.info('[SyncManager] readClipboard: text length=' + text.length)
-      if (text.length > 0 && text !== this._cachedClipboardText) {
+      // 与最后一次同步相同的内容也照常发送：changeCount 变化即为用户真实复制
+      // （典型场景：再次复制同一条验证码/文本，对端剪贴板需要被刷新）。
+      // 回环保护由 isRemoteUpdate + lastChangeCount 双重校验负责，与此判断无关
+      if (text.length > 0) {
         this._cachedClipboardText = text
         this.sendClipboardText(text)
         this.addRecord(text, 'sent')
       } else {
-        // 剪贴板无变化，清除脏标记
+        // 剪贴板无文本，清除脏标记
         this._clipboardDirty = false
       }
     }).catch((err: Error) => {

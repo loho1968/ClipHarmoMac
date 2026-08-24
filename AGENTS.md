@@ -49,6 +49,17 @@ node src/index.js          # 默认端口 3000，环境变量 RELAY_PORT / RELAY
 # 或 PM2：pm2 start ecosystem.config.js
 ```
 
+#### 增量部署到线上（110.42.225.37）
+
+```bash
+bash relay-server/deploy/push.sh            # 备份→rsync→语法检查→pm2 重启→健康检查（失败自动回滚）
+bash relay-server/deploy/push.sh rollback   # 回滚到服务器上最近一次备份
+```
+
+- 走本机 `~/.ssh/config` 的 `tencent` 别名（root@110.42.225.37），服务器路径 `/opt/harmony-and-mac/relay-server`
+- 服务器保留最近 5 份备份（`backups/relay-时间戳.tar.gz`）；`package.json` 有变化时自动 `npm install --production`
+- 首次初始化（装 PM2/Nginx 等）用 `relay-server/deploy/setup.sh`，在服务器上执行
+
 ## 项目结构
 
 ```

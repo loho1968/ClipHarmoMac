@@ -1,15 +1,81 @@
 import { util } from '@kit.ArkTS'
+import { preferences } from '@kit.ArkData'
 
 // 通信协议常量
 export class ProtocolConst {
-  // 应用版本号
-  static readonly APP_VERSION: string = '1.0.0 (build 1)'
+  // 应用版本号（每次发版修改，页面底部会显示）
+  static readonly APP_VERSION: string = '1.1.0 (build 3)'
   static readonly BROADCAST_PORT: number = 19876
   static readonly WS_PORT: number = 19877
   static readonly DISCOVERY_TCP_PORT: number = 19878
   static readonly BROADCAST_INTERVAL: number = 3000
   static readonly CLIPBOARD_POLL_INTERVAL: number = 500
-  static readonly DEVICE_ID: string = 'Harmony-' + Math.floor(Math.random() * 9000 + 1000)
+
+  // 设备唯一标识存储键（存放在 clipboardsync_relay 偏好文件中）
+  static readonly DEVICE_ID_STORAGE_KEY: string = 'clipboardsync_device_id'
+
+  // 已持久化的设备 ID（loadDeviceId 成功后非空）
+  private static _deviceId: string = ''
+  // 进程内回退 ID：loadDeviceId 尚未调用时保证本进程内取值稳定
+  private static _fallbackDeviceId: string = 'Harmony-' + Math.floor(Math.random() * 9000 + 1000)
+  private static _devicePrefs: preferences.Preferences | null = null
+
+  /**
+   * 设备唯一标识：首次生成后持久化，此后每次启动保持不变。
+   * （此前每次进程启动随机生成，导致中继服务器无法按 deviceId
+   * 踢掉残留旧连接、Mac 端"已配对"显示的编号每次重启都变）
+   */
+  static get DEVICE_ID(): string {
+    return ProtocolConst._deviceId.length > 0
+      ? ProtocolConst._deviceId
+      : ProtocolConst._fallbackDeviceId
+  }
+
+  /**
+   * 创建（或复用）设备 ID 所在的偏好文件实例
+   * @param context 应用上下文
+   * @returns 偏好文件实例，创建失败时返回 null
+   */
+  private static createDevicePrefs(context: Context): preferences.Preferences | null {
+    try {
+      return preferences.getPreferencesSync(context, { name: 'clipboardsync_relay' })
+    } catch (_e) {
+      console.error('[ProtocolConst] createDevicePrefs: prefs creation failed')
+      return null
+    }
+  }
+
+  /**
+   * 加载或生成并持久化设备唯一标识
+   * 应在 EntryAbility.onCreate 中调用（早于所有网络连接建立）
+   * @param context 应用上下文
+   * @returns 无
+   */
+  static loadDeviceId(context: Context): void {
+    if (ProtocolConst._deviceId.length > 0) {
+      return
+    }
+    let prefs: preferences.Preferences | null = ProtocolConst._devicePrefs
+    if (prefs === null) {
+      prefs = ProtocolConst.createDevicePrefs(context)
+      if (prefs === null) {
+        console.error('[ProtocolConst] loadDeviceId: using fallback id')
+        return
+      }
+      ProtocolConst._devicePrefs = prefs
+    }
+    const saved: string = prefs.getSync(ProtocolConst.DEVICE_ID_STORAGE_KEY, '') as string
+    if (saved.length > 0) {
+      ProtocolConst._deviceId = saved
+      console.info('[ProtocolConst] DeviceId loaded: ' + saved)
+      return
+    }
+    const generated: string = 'Harmony-' + Math.floor(Math.random() * 9000 + 1000)
+    prefs.putSync(ProtocolConst.DEVICE_ID_STORAGE_KEY, generated)
+    prefs.flush()
+    ProtocolConst._deviceId = generated
+    console.info('[ProtocolConst] DeviceId generated and persisted: ' + generated)
+  }
 }
 
 // 消息类型枚举
@@ -128,6 +194,8 @@ export enum RelayAction {
   PONG = 'pong',
   PAIRED = 'paired',
   PEER_GONE = 'peer_gone',
+  // 服务端回执：发送的房间内无其他设备，消息未被任何人收到
+  RELAY_NO_PEER = 'relay_no_peer',
   ERROR = 'error'
 }
 
@@ -141,4 +209,6 @@ export interface RelayMessage {
   payload?: SyncMessage
   message?: string
   roomDeviceCount?: number
+  // relay_no_peer 回执携带：被丢弃的消息类型
+  type?: string
 }

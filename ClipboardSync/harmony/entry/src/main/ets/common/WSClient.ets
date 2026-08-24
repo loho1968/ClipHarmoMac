@@ -34,6 +34,8 @@ export class WSClient {
   onMessage?: (msg: SyncMessage) => void
   onPaired?: (deviceId: string) => void
   onPeerGone?: (deviceId: string) => void
+  // 发送被丢弃回执（房间内无其他设备），参数为被丢弃的消息类型
+  onNoPeer?: (droppedType: string) => void
   onAuthResult?: (success: boolean, pairedDeviceId: string | null) => void
   onError?: (msg: string) => void
   onStatusChange?: (mode: string) => void
@@ -270,6 +272,15 @@ export class WSClient {
 
       case RelayAction.PONG:
         break  // 心跳响应（lastServerActivityMs 已在 handleMessage 刷新）
+
+      case RelayAction.RELAY_NO_PEER:
+        // 房间内无其他设备：消息已被服务端丢弃（典型原因：两端配对码不一致）
+        hilog.error(DOMAIN, TAG, `[WS] RELAY_NO_PEER: 房间内无其他设备，${msg.type || '消息'} 未被送达`)
+        this.pairedDeviceId = ''
+        this.mode = WSClient.CONNECTION_MODE_WAITING_FOR_PAIR
+        this.onNoPeer?.(msg.type || '消息')
+        this.onStatusChange?.(this.mode)
+        break
 
       case RelayAction.ERROR:
         hilog.error(DOMAIN, TAG, `[WS] server ERROR: ${msg.message}`)

@@ -521,9 +521,16 @@ struct Index {
             .height(14)
             .fillColor('#4CAF50')
           if (this.connectionMode === ConnectionMode.RELAY) {
-            Text('云中继 · 剪贴板将自动同步')
-              .fontSize(12)
-              .fontColor('#4CAF50')
+            if (this.relayPairedDeviceId.length > 0) {
+              Text('云中继 · 剪贴板将自动同步')
+                .fontSize(12)
+                .fontColor('#4CAF50')
+            } else {
+              // 传输层已连上中继，但房间内无对端（典型：两端配对码不一致）
+              Text('云中继已连接 · 房间内无 Mac，请核对两端配对码')
+                .fontSize(12)
+                .fontColor('#FF9800')
+            }
           } else {
             Text('已连接，剪贴板将自动同步')
               .fontSize(12)

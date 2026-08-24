@@ -226,8 +226,15 @@ class SyncManager: ObservableObject {
                 // 仅当 LAN 未连接时才切换到 relay 模式
                 if self.server.connectedCount == 0 {
                     self.connectionMode = .relay
-                    self.status = .connected
-                    clipLog("[SyncManager]   → switched to relay mode, status=connected")
+                    if self.wsClient.pairedDeviceId != nil {
+                        self.status = .connected
+                        clipLog("[SyncManager]   → switched to relay mode, status=connected")
+                    } else {
+                        // 已连上中继但房间内无对端：保持"搜索中"，
+                        // 避免两端配对码不一致时双方都显示"已连接"的假连接
+                        self.status = .discovering
+                        clipLog("[SyncManager]   → relay connected but unpaired, status=discovering")
+                    }
                 } else {
                     clipLog("[SyncManager]   → LAN active, keeping LAN mode")
                 }
@@ -298,6 +305,19 @@ class SyncManager: ObservableObject {
                 if self.connectionMode == .relay, self.server.connectedCount == 0 {
                     self.status = .discovering
                     clipLog("[SyncManager]   → peer gone, status downgraded to discovering")
+                }
+            }
+        }
+
+        wsClient.onNoPeer = { [weak self] droppedType in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                clipLog("[SyncManager] ═══ WS onNoPeer: \(droppedType) 未被送达 ═══")
+                clipLog("[SyncManager]   roomKey=\(self.roomKey) pairedDeviceId=\(self.wsClient.pairedDeviceId ?? "nil")")
+                self.relayPairedDeviceId = nil
+                self.relayStatusText = "房间内无其他设备，\(droppedType) 未被送达（检查两端配对码）"
+                if self.connectionMode == .relay, self.server.connectedCount == 0 {
+                    self.status = .discovering
                 }
             }
         }

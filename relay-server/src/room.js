@@ -101,6 +101,15 @@ class Room {
     }
     if (count === 0) {
       console.log(`${config.logPrefix} [${this.roomKey}]   → no other devices to forward to`)
+      // 回执发送方：房间内无其他设备，消息未被任何人收到。
+      // 客户端据此把"传输层已连接但房间无对端"的假连接显示为可见的未送达状态。
+      const senderWs = this.devices.get(fromDeviceId)
+      if (senderWs) {
+        this._send(senderWs, {
+          action: 'relay_no_peer',
+          type: msgType,
+        })
+      }
     }
     return count
   }

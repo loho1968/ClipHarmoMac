@@ -3,7 +3,7 @@ import { window } from '@kit.ArkUI'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { notificationManager } from '@kit.NotificationKit'
 import { getSharedSyncManager, SyncStatus, ConnectionMode } from '../model/SyncManager'
-import { RelayConfig } from '../common/Protocol'
+import { RelayConfig, ProtocolConst } from '../common/Protocol'
 import { hilog } from '@kit.PerformanceAnalysisKit'
 
 const NOTIFICATION_ID: number = 1001
@@ -17,6 +17,8 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[ClipboardSync] EntryAbility onCreate')
     RelayConfig.loadConfig(this.context)
+    // 设备唯一标识：首次生成后持久化（必须早于任何网络连接建立）
+    ProtocolConst.loadDeviceId(this.context)
     this.handleIncomingWant(want)
   }
 

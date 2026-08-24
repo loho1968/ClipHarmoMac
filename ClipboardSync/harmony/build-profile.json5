@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/loho/.ohos/config/default_harmony_A52gUB-Y34nm8PjQrrZGQMAxgvtrGGenpMEKziR__xw=.cer",
+          "certpath": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.cer",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B57F073B613F6D30CB71DEEADEA68B9057F84B05C94150A5E7F439AD926D0490A781096DD0E5D8A",
-          "profile": "/Users/loho/.ohos/config/default_harmony_A52gUB-Y34nm8PjQrrZGQMAxgvtrGGenpMEKziR__xw=.p7b",
+          "keyPassword": "0000001A8376D1FAA547F296C2A2FBC47105B989663C31018487943B62340D3EA832785485D8C9AE8DBB",
+          "profile": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.p7b",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/loho/.ohos/config/default_harmony_A52gUB-Y34nm8PjQrrZGQMAxgvtrGGenpMEKziR__xw=.p12",
-          "storePassword": "0000001B6E8886FBF5CC865DBEA715EC44F6E3B218929083697E4A105A13453130F6FAC14569C2FA2B9F6E"
+          "storeFile": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.p12",
+          "storePassword": "0000001ACCE295E21CC6C48282BD24E20F46F87DFD5AF8DD3731C0500F42A1B37422AA6D0CCF90B5F5D6"
         }
       }
     ],

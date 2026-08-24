@@ -12,6 +12,8 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
     var onMessageReceived: ((SyncMessage) -> Void)?
     var onPaired: ((String) -> Void)?
     var onPeerGone: ((String) -> Void)?
+    /// 发送被丢弃回执（房间内无其他设备），参数为被丢弃的消息类型
+    var onNoPeer: ((String) -> Void)?
     var onAuthResult: ((Bool, String?) -> Void)?
     var onError: ((String) -> Void)?
 
@@ -265,6 +267,16 @@ class WSClient: NSObject, URLSessionWebSocketDelegate {
 
         case RelayAction.pong.rawValue:
             break  // 心跳响应，无需处理
+
+        case RelayAction.relayNoPeer.rawValue:
+            // 房间内无其他设备：消息已被服务端丢弃（典型原因：两端配对码不一致）
+            pairedDeviceId = nil
+            connectionMode = .waitingForPair
+            let droppedType = msg.type ?? "消息"
+            clipLog("[WSClient] relay_no_peer: 房间内无其他设备，\(droppedType) 未被送达")
+            DispatchQueue.main.async { [weak self] in
+                self?.onNoPeer?(droppedType)
+            }
 
         case RelayAction.error.rawValue:
             let errorMsg = msg.message ?? "未知中继错误"
