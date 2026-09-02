@@ -8,7 +8,7 @@
         "mcp"
       ],
       "env": {
-        "PROJECT_PATH": "/Users/lh/Developer/HarmonyAndMac"
+        "PROJECT_PATH": "/Users/loho/Developer/ClipHarmoMac/ClipboardSync/harmony"
       },
       "enabled": true
     },
@@ -22,7 +22,7 @@
     },"codegraph-arkts": {
       "type": "stdio",
       "command": "node",
-      "args": ["/Users/lh/Developer/Utils/codegraph-arkts/dist/bin/codegraph.js", "serve", "--mcp"]
+      "args": ["/Users/loho/Developer/Demo/codegraph-arkts/dist/bin/codegraph.js", "serve", "--mcp"]
     }
   }
 }

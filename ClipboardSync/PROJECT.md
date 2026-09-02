@@ -156,7 +156,7 @@ ipconfig getifaddr en0
 
 ### P2 - 安全与扩展
 
-- [ ] **端到端加密**：两端配对时交换密钥，AES-256-GCM 加密传输内容
+- [ ] **端到端加密（恢复/清理决策）**：曾实现 HKDF→AES-256-GCM；2026-09 d45ee2a 因两端密钥不同步乱码而全局禁用（shouldEncrypt 恒 false），加解密代码保留未接线。恢复前必须先保证两端 roomKey/派生密钥同步；否则可整链清理并删 CryptoModule 死代码
 - [x] **跨 WiFi/广域网支持**：✅ WebSocket 中继服务器已部署
 - [x] **多设备支持**：✅ TCPServer 支持多个 TCP 连接
 - [x] **大文件传输优化**：✅ 256KB 分片 + 500KB 阈值

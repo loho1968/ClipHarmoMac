@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "certpath": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.cer",
-          "keyAlias": "debugKey",
-          "keyPassword": "0000001A8376D1FAA547F296C2A2FBC47105B989663C31018487943B62340D3EA832785485D8C9AE8DBB",
-          "profile": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.p7b",
+          "storeFile": "./signing/lohoapp.p12",
+          "storePassword": "0000001844A8FE84DE840DF24201F31AF43EB53274364A32B76A38E8C5AC671E861DC55BBB3FB612",
+          "keyAlias": "lohoappkey",
+          "keyPassword": "0000001815B39A4284B29C8EBB3AA56FF44636A26549E87C030A6739638962DE40F339B71CF38EA8",
           "signAlg": "SHA256withECDSA",
-          "storeFile": "/Users/lh/.ohos/config/default_harmony_k9TYZ_0FwloPdx2OZRgZac6suVFhl9Mpj8gxDFomDoM=.p12",
-          "storePassword": "0000001ACCE295E21CC6C48282BD24E20F46F87DFD5AF8DD3731C0500F42A1B37422AA6D0CCF90B5F5D6"
+          "profile": "./signing/ClipboardSyncDebug.p7b",
+          "certpath": "./signing/roamly.cer"
         }
       }
     ],
@@ -19,10 +19,10 @@
       {
         "name": "default",
         "signingConfig": "default",
-        "compatibleSdkVersion": "6.0.1(21)",
+        "compatibleSdkVersion": "26.0.0",
         "runtimeOS": "HarmonyOS",
         "compileSdkVersion": "26.0.0",
-        "targetSdkVersion": "6.1.0(23)"
+        "targetSdkVersion": "26.0.0"
       }
     ]
   },
