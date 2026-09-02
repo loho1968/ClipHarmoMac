@@ -1,47 +1,44 @@
-# 工作交接 — 2026-07-10（第二次）
+# 工作交接 — 2026-09-02
 
 ## 机器信息
 - **主机名**: `loho.local`
 - **分支**: `main`
-- **最近提交**: `edc1612` — fix: 手机端不再反复拉取 Mac 剪贴板
-- **工作树**: 干净 ✅
+- **远端**: origin = github.com/loho1968/ClipHarmoMac.git（push 已配置）
+- **工作树**: 本次提交后将干净 ✅（工具目录未入库，见"待清理"）
 
 ## 今日完成
 
-### 第一轮
-- [x] 保存目录选择器修复（`DocumentSelectOptions` → `DocumentSaveOptions`）
-- [x] 剪贴板回环修复（`update` 事件 `changeCount` 二次校验 + `savePendingFile` 缓存同步）
-- [x] 后台轮询提速（5s → 2s）+ 诊断日志（熄屏心跳 + 亮屏时间戳）
+### 环境核对（无代码产出）
+- [x] devecocli 1.3.1 可用；HUAWEI Mate 80 RS 真机在线（serial 5YZ0225C02003196）+ TripleFold 模拟器
+- [x] codegraph / codegraph-arkts 索引为最新（根索引 /Users/lh/Developer/ClipHarmoMac/.codegraph，sync = Already up to date）
+- [x] 确认发布通道：`bash relay-server/deploy/push.sh` 走 `~/.ssh/config` 的 `tencent` 别名（root@110.42.225.37）
+- [x] 通读 README / CONTEXT / DECISIONS / PROJECT / HANDOFF 与三端代码结构，产出《项目熟悉报告》
 
-### 第二轮（接班后）
-- [x] **手机端不再反复拉取 Mac 剪贴板**：去掉后台 30s 定时拉取 + 切前台无条件拉取，改为仅断线重连时追补一次
+### 代码改动（⚠️ 尚未编译验证）
+- [x] **全局禁用端到端加密，统一明文**：此前多次出现两端 HKDF 派生密钥不同步 → 乱码 Bug。
+  局域网 / 云中继下现在都传明文；encrypt/decrypt 与 keyExchange 代码保留但不再触发。
 
 ## 文件变更清单
 
 | 文件 | 变更说明 |
 |------|---------|
-| `pages/Index.ets` | `selectSaveDirectory` + `pickDirectoryAndSave` 改用 `DocumentSaveOptions` |
-| `model/SyncManager.ets` | 回环修复 + 轮询提速 + 诊断日志 + 去掉定时/前台拉取 |
-| `entryability/EntryAbility.ets` | `onForeground`/`onBackground` 时间戳日志 |
-
-## 剪贴板拉取策略（最终版）
-
-| 时机 | 行为 |
-|---|---|
-| Mac 复制新内容 | 主动推送到手机 ✅ |
-| 手机复制新内容 | 主动推送到 Mac ✅ |
-| TCP 连接建立 | 一次追补 Mac 当前内容 ✅ |
-| `onAppForeground` + 断线 | 重连后追补 ✅ |
-| 后台 30s 轮询 | **不拉取** ← 本轮改掉 |
-| `onAppForeground` + 已连接 | **不拉取** ← 本轮改掉 |
+| `ClipboardSync/mac/ClipboardSync/CryptoModule.swift` | `shouldEncrypt(messageType:)` 恒返回 `false`（原来是 switch 返回 true） |
+| `ClipboardSync/harmony/entry/src/main/ets/model/SyncManager.ets` | `shouldEncryptType(type:)` 恒返回 `false`（原来 4 类内容需加密） |
+| `.ai/HANDOFF.md` | 本文档 |
 
 ## 编译状态
-⚠️ 鸿蒙端未编译验证
+⚠️ **两端均未编译验证**（swift build / devecocli build 都没跑）
 
 ## 工作断点
-- **正在做**: 无
-- **下一步**: 鸿蒙端编译 → 真机测试全流程
+- **正在做**: 加密禁用（明文方案）—— 代码已改完，未编译、未上真机
+- **下一步**（回家后优先）:
+  1. Mac 编译：`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift build --package-path /Users/lh/Developer/ClipHarmoMac/ClipboardSync/mac`（注意路径是 lh 不是 loho）
+  2. 鸿蒙编译：`devecocli build --project-path ClipboardSync/harmony`
+  3. 真机全流程测试（Mate 80 RS 在线；5G 场景走 ssh tencent 中继验证）
 
-## 待清理
-- [x] 代码已提交推送
-- [ ] 鸿蒙端编译验证 + 真机测试
+## 待清理 / 备忘
+- [x] 两处代码改动已提交推送
+- [ ] 两端编译验证 + 真机测试（明文方案回归：文本/图片/文件/验证码、LAN + 5G 中继）
+- 协议侧不对称（疑似遗留，后续可清理）：`MessageType.verificationCode` / `smsSender` 只在 Swift 侧（Protocol.swift），鸿蒙 Protocol.ets 没有
+- Mac 端 `ProtocolConst.deviceId` 每次启动随机（鸿蒙已持久化），如需"踢旧连接/版本可辨识"完善可仿照鸿蒙持久化
+- 未入库的本地工具目录（git status 会显示 ??，属正常）：harmony 下 `.claude/.codebuddy/.codex/.cursor/.deveco/.opencode/.qoder/.trae/.trae-cn`，若嫌吵可加 .gitignore
