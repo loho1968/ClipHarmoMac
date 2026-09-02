@@ -6,11 +6,11 @@
         "type": "HarmonyOS",
         "material": {
           "storeFile": "./signing/lohoapp.p12",
-          "storePassword": "0000001844A8FE84DE840DF24201F31AF43EB53274364A32B76A38E8C5AC671E861DC55BBB3FB612",
+          "storePassword": "00000018288B30D04C953C15E6C50576E528806C20E8F67A9F446ACB2F4CB7AC5C57060DEABD65A8",
           "keyAlias": "lohoappkey",
-          "keyPassword": "0000001815B39A4284B29C8EBB3AA56FF44636A26549E87C030A6739638962DE40F339B71CF38EA8",
+          "keyPassword": "0000001885F6D8051DA10563880CEF2F8B4CB99648DBB4AFA1F6327E0C46DC2F8024F2C7BC693186",
           "signAlg": "SHA256withECDSA",
-          "profile": "./signing/ClipboardSyncDebug.p7b",
+          "profile": "./signing/ClipboardSyncPasteDebug.p7b",
           "certpath": "./signing/roamly.cer"
         }
       }
