@@ -92,6 +92,9 @@ export class SyncManager {
   private lastSentTimestamp: number = 0
   private _clipboardDirty: boolean = false
   private _cachedClipboardText: string = ''
+  private _clipboardReadInFlight: boolean = false   // 剪贴板读取/重试链进行中，防并发双发
+  private _clipboardReadAttempt: number = 0          // 本次变化已尝试读取次数（空读重试）
+  private _pendingClipboardRead: boolean = false     // 重试链期间又来了新变化，链结束后补一次
   private _connectingIp: string = ''  // 正在连接中的 IP，防重入
   private _lastDiscoveredMacId: string = ''  // 最近发现的 Mac deviceId
   private _lastDiscoveredSSID: string = ''  // 最近发现的 Mac 所在 SSID
@@ -908,9 +911,23 @@ export class SyncManager {
   }
 
   private readClipboardAndSend(): void {
-    this.systemPasteboard.getData().then(async (data: pasteboard.PasteData) => {
+    // 若已有读取/重试链在跑，先记下待补一次，链结束后处理，避免并发 getData 双发
+    if (this._clipboardReadInFlight) {
+      this._pendingClipboardRead = true
+      return
+    }
+    this._clipboardReadInFlight = true
+    this._clipboardReadAttempt = 0
+    this.attemptClipboardRead()
+  }
+
+  // 空读重试：某些设备/系统上 on('update') 触发瞬间 getData 会返回空（数据未就绪/授权时序），
+  // 若只读一次就放弃，刚复制的文本会丢失（曾导致"手机复制 Mac 无反应"）。
+  // 这里最多重试 4 次、间隔 400ms，直到读到非空文本再发送。
+  private attemptClipboardRead(): void {
+    this.systemPasteboard.getData().then((data: pasteboard.PasteData) => {
       if (!data) {
-        console.info('[SyncManager] readClipboard: data is null')
+        this.handleEmptyClipboardRead()
         return
       }
       const text = this.extractText(data)
@@ -920,15 +937,44 @@ export class SyncManager {
       // 回环保护由 isRemoteUpdate + lastChangeCount 双重校验负责，与此判断无关
       if (text.length > 0) {
         this._cachedClipboardText = text
+        this.finishClipboardReadChain()
         this.sendClipboardText(text)
         this.addRecord(text, 'sent')
-      } else {
-        // 剪贴板无文本，清除脏标记
         this._clipboardDirty = false
+      } else {
+        this.handleEmptyClipboardRead()
       }
     }).catch((err: Error) => {
       console.error('[SyncManager] readClipboard error: ' + err.message)
+      this.handleEmptyClipboardRead()
     })
+  }
+
+  private handleEmptyClipboardRead(): void {
+    this._clipboardReadAttempt++
+    console.info('[SyncManager] readClipboard: empty/error, retry ' + this._clipboardReadAttempt + '/4')
+    if (this._clipboardReadAttempt < 4) {
+      setTimeout(() => {
+        this.attemptClipboardRead()
+      }, 400)
+    } else {
+      // 连续 4 次仍为空：确属空复制或无文本内容，放弃本次
+      console.info('[SyncManager] Clipboard read still empty after retries, give up')
+      this.finishClipboardReadChain()
+      this._clipboardDirty = false
+    }
+  }
+
+  // 读取链结束：复位并发标记，并补发重试期间到达的新变化
+  private finishClipboardReadChain(): void {
+    this._clipboardReadInFlight = false
+    if (this._pendingClipboardRead) {
+      this._pendingClipboardRead = false
+      // 稍等片刻再读，避免立刻又拿到同一份未就绪的数据
+      setTimeout(() => {
+        this.readClipboardAndSend()
+      }, 300)
+    }
   }
 
   private extractText(data: pasteboard.PasteData): string {
