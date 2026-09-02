@@ -126,14 +126,10 @@ final class CryptoModule {
     // MARK: 加密范围判断
 
     /// 判断某类消息的 content 是否需要加密
+    /// 已全局禁用加密：此前多次出现密钥不同步导致的乱码 Bug，
+    /// 局域网/云中继下统一传明文，避免端到端加密的派生密钥不一致问题。
     static func shouldEncrypt(messageType: MessageType) -> Bool {
-        switch messageType {
-        case .clipboardText, .clipboardImage, .clipboardFile,
-             .clipboardDataChunk, .verificationCode:
-            return true
-        case .ping, .pong, .keyExchange, .roomKeyInfo, .clipboardPoll:
-            return false
-        }
+        return false
     }
 
     /// 清除加密会话（新配对扫码时调用）

@@ -1323,14 +1323,10 @@ export class SyncManager {
 
   /**
    * 判断某类消息是否需要加密
+   * 已全局禁用加密：此前多次出现密钥不同步导致的乱码 Bug，
+   * 局域网/云中继下统一传明文，避免端到端加密的派生密钥不一致问题。
    */
   private shouldEncryptType(type: MessageType): boolean {
-    if (type === MessageType.CLIPBOARD_TEXT ||
-        type === MessageType.CLIPBOARD_IMAGE ||
-        type === MessageType.CLIPBOARD_FILE ||
-        type === MessageType.CLIPBOARD_DATA_CHUNK) {
-      return true
-    }
     return false
   }
 
