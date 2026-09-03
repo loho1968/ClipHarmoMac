@@ -35,3 +35,14 @@ entry/src/main/resources/rawfile/relay_config.json
 
 # IDE
 .vscode/
+
+# Claude‑Code
+.claude/sessions/
+.claude/cache/
+.claude/*.log
+.claude/output/
+.claude/memory/
+
+# 规则：忽略 skills 下全部，但是放行【自己手写】的项目技能；第三方/大资源单独排除
+.claude/skills/*
+**/skills/*
