@@ -9,7 +9,7 @@
 #   bash deploy/push.sh rollback   回滚到最近一次备份
 #
 # 流程: 本地语法检查 → 远端备份 → rsync 同步 → 依赖检查
-#       → 远端语法检查 → pm2 重启 → 健康检查（失败自动回滚）
+#       → 远端语法检查 → 运行目录校验 + pm2 重启 → 健康检查（失败自动回滚）
 # ============================================================
 set -euo pipefail
 
@@ -87,9 +87,27 @@ remote_check() {
 
 # 重启服务并做健康检查，失败自动回滚
 restart_and_verify() {
-  step "5/6 重启 $PM2_APP..."
-  ssh "$SSH_HOST" "cd '$REMOTE_DIR' && pm2 restart $PM2_APP --update-env >/dev/null"
-  ok "已重启"
+  step "5/6 校验运行目录并重启 $PM2_APP..."
+  local pid actual
+  # 防回归：若 PM2 应用被人手动 start 到了别的目录，restart 会重启到旧/错误代码，
+  # 因此重启前先核对运行进程的工作目录是否就是部署目录。
+  pid="$(ssh "$SSH_HOST" "pm2 pid $PM2_APP 2>/dev/null" | tr -d '[:space:]' || true)"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && [ "$pid" != "0" ]; then
+    actual="$(ssh "$SSH_HOST" "readlink /proc/$pid/cwd 2>/dev/null" | tr -d '[:space:]')"
+    if [ -n "$actual" ] && [ "$actual" != "$REMOTE_DIR" ]; then
+      fail "PM2 应用 $PM2_APP 运行目录异常: $actual (期望 $REMOTE_DIR)"
+      fail "多半是有人在服务器上手动 pm2 start 到了别的目录。本次中止，避免重启到错误代码。"
+      echo "    修复命令: ssh $SSH_HOST \"pm2 delete $PM2_APP && cd $REMOTE_DIR && pm2 start ecosystem.config.js && pm2 save\""
+      fail "(代码已同步到 $REMOTE_DIR, 但未重启; 修复后重跑 push.sh 即可)"
+      return 1
+    fi
+    ok "运行目录校验通过 ($actual)"
+    ssh "$SSH_HOST" "cd '$REMOTE_DIR' && pm2 restart $PM2_APP --update-env >/dev/null"
+  else
+    ok "应用 $PM2_APP 当前未运行/未注册，从部署目录全新启动"
+    ssh "$SSH_HOST" "cd '$REMOTE_DIR' && pm2 start ecosystem.config.js && pm2 save >/dev/null"
+  fi
+  ok "已重启/启动"
 
   step "6/6 健康检查..."
   local i health

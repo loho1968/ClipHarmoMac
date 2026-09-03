@@ -1,4 +1,5 @@
-import { UIAbility, AbilityConstant, Want, bundleManager, wantAgent, WantAgent } from '@kit.AbilityKit'
+import { UIAbility, AbilityConstant, Want, bundleManager, wantAgent, WantAgent, abilityAccessCtrl, Permissions, PermissionRequestResult } from '@kit.AbilityKit'
+import { BusinessError } from '@kit.BasicServicesKit'
 import { window } from '@kit.ArkUI'
 import { backgroundTaskManager } from '@kit.BackgroundTasksKit'
 import { notificationManager } from '@kit.NotificationKit'
@@ -13,6 +14,38 @@ const DOMAIN: number = 0x0000
 export default class EntryAbility extends UIAbility {
   private isBackgroundRunning: boolean = false
   private isNotificationPublished: boolean = false
+  private clipboardPermissionRequested: boolean = false
+
+  // READ_PASTEBOARD 为受限 user_grant 权限：module.json5 已声明 + profile(AGC) 已下发后，
+  // 在此向用户弹窗申请一次。授权后程序化 getData() 才可读到剪贴板（否则静默返回空，自动推送不可用）。
+  private requestClipboardPermission(): void {
+    if (this.clipboardPermissionRequested) {
+      return
+    }
+    this.clipboardPermissionRequested = true
+    const atManager = abilityAccessCtrl.createAtManager()
+    const permission: Permissions = 'ohos.permission.READ_PASTEBOARD'
+    try {
+      const granted: abilityAccessCtrl.GrantStatus =
+        atManager.checkAccessTokenSync(this.context.applicationInfo.accessTokenId, permission)
+      if (granted === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+        console.info('[ClipboardSync] READ_PASTEBOARD already granted')
+        return
+      }
+    } catch (e) {
+      console.error('[ClipboardSync] checkAccessTokenSync error: ' + JSON.stringify(e))
+    }
+    atManager.requestPermissionsFromUser(this.context, [permission],
+      (err: BusinessError, data: PermissionRequestResult) => {
+        if (err) {
+          console.error('[ClipboardSync] request READ_PASTEBOARD fail: ' + err.message)
+          this.clipboardPermissionRequested = false // 允许下次再申请
+          return
+        }
+        const granted: boolean = data.authResults.length > 0 && data.authResults[0] === 0
+        console.info('[ClipboardSync] READ_PASTEBOARD request result granted=' + granted)
+      })
+  }
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     console.info('[ClipboardSync] EntryAbility onCreate')
@@ -48,6 +81,10 @@ export default class EntryAbility extends UIAbility {
         return
       }
       console.info('[ClipboardSync] Loaded content successfully')
+      // 等 UI 就绪后再弹权限申请，避免弹窗时机过早
+      setTimeout(() => {
+        this.requestClipboardPermission()
+      }, 500)
     })
   }
 
