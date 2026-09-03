@@ -99,13 +99,14 @@ enum RelayConfig {
         let host: String
         let port: Int
         let wsPath: String
+        let defaultRoomKey: String
     }
 
     private static let _config: RelayValues = RelayConfig.loadFromBundle()
 
     /// 从 ~/.clipboardsync/relay_config.json 读取默认值，不存在则回退 localhost
     private static func loadFromBundle() -> RelayValues {
-        let fallback = RelayValues(host: "localhost", port: 8443, wsPath: "/ws")
+        let fallback = RelayValues(host: "localhost", port: 8443, wsPath: "/ws", defaultRoomKey: "")
 
         // 读取用户主目录下的配置文件（可选，不存在时用兜底值）
         let homeConfigURL = FileManager.default.homeDirectoryForCurrentUser
@@ -117,7 +118,7 @@ enum RelayConfig {
             print("[RelayConfig] No config at ~/.clipboardsync/relay_config.json, using fallback: \(fallback.host):\(fallback.port)")
             return fallback
         }
-        print("[RelayConfig] Loaded config from ~/.clipboardsync/relay_config.json: host=\(values.host)")
+        print("[RelayConfig] Loaded config from ~/.clipboardsync/relay_config.json: host=\(values.host), fixedRoomKey=\(!values.defaultRoomKey.isEmpty)")
         return values
     }
 
@@ -127,8 +128,15 @@ enum RelayConfig {
         let host = relay["defaultHost"] as? String ?? "localhost"
         let port = relay["defaultPort"] as? Int ?? 8443
         let wsPath = relay["wsPath"] as? String ?? "/ws"
-        return RelayValues(host: host, port: port, wsPath: wsPath)
+        let configuredRoomKey = relay["defaultRoomKey"] as? String ?? ""
+        let defaultRoomKey = configuredRoomKey.range(of: "^[A-Z0-9]{6}$", options: .regularExpression) != nil
+            ? configuredRoomKey
+            : ""
+        return RelayValues(host: host, port: port, wsPath: wsPath, defaultRoomKey: defaultRoomKey)
     }
+
+    /// 可选的统一配对码。配置后，所有 Mac 使用同一中继房间。
+    static let defaultRoomKey: String = RelayConfig._config.defaultRoomKey
 
     /// 共享 UserDefaults（统一 debug/release 的持久化，不受 Bundle Identifier 影响）
     static let sharedDefaults = UserDefaults(suiteName: "com.clipboardsync.shared")!

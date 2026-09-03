@@ -56,6 +56,9 @@ class SyncManager: ObservableObject {
     private var lastSentTimestamp: Double = 0
     // 标记正在处理远端消息，防止 ClipboardMonitor 级联触发
     private var isProcessingRemote: Bool = false
+    // 防止手机重连恢复 Mac 当前剪贴板时，把同一内容再次写入历史
+    private var lastHistoryRecordContent: String?
+    private var lastHistoryRecordAt: Date?
     // UDP 发现的 IP → deviceId 映射（用于 TCP 连接时显示设备名）
     private var deviceIPMap: [String: String] = [:]
 
@@ -346,18 +349,27 @@ class SyncManager: ObservableObject {
 
     private func startRelayIfNeeded() {
         let savedKey = RelayConfig.sharedDefaults.string(forKey: RelayConfig.roomKeyDefaultsKey) ?? ""
+        let configuredKey = RelayConfig.defaultRoomKey
         let currentHost = RelayConfig.currentHost
         let defaultHost = RelayConfig.defaultHost
         let serverURL = RelayConfig.serverURL
         clipLog("[SyncManager] ═══ startRelayIfNeeded ═══")
         clipLog("[SyncManager]   savedKey    = \(savedKey.isEmpty ? "(empty)" : savedKey)")
+        clipLog("[SyncManager]   fixedKey    = \(configuredKey.isEmpty ? "(none)" : "configured")")
         clipLog("[SyncManager]   currentHost = \(currentHost)")
         clipLog("[SyncManager]   defaultHost = \(defaultHost)")
         clipLog("[SyncManager]   serverURL   = \(serverURL.absoluteString)")
         clipLog("[SyncManager]   hasRelayConfig = \(hasRelayConfig)")
 
-        // Room Key 始终生成并持久化（TCP roomKeyInfo 交换需要）
-        if savedKey.isEmpty {
+        // 配置中的固定码优先，确保不同 Mac 进入同一个中继房间。
+        if !configuredKey.isEmpty {
+            if savedKey != configuredKey {
+                clipLog("[SyncManager] Applying configured fixed Room Key")
+                RelayConfig.sharedDefaults.set(configuredKey, forKey: RelayConfig.roomKeyDefaultsKey)
+            }
+            roomKey = configuredKey
+        } else if savedKey.isEmpty {
+            // Room Key 始终生成并持久化（TCP roomKeyInfo 交换需要）
             generateRoomKeyOnly()
         } else {
             roomKey = savedKey
@@ -417,8 +429,13 @@ class SyncManager: ObservableObject {
         wsClient.disconnect()
         relayPairedDeviceId = nil
         crypto.clearSession()
-        let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        let key = String((0..<RelayConfig.roomKeyLength).map { _ in chars.randomElement()! })
+        let key: String
+        if !RelayConfig.defaultRoomKey.isEmpty {
+            key = RelayConfig.defaultRoomKey
+        } else {
+            let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+            key = String((0..<RelayConfig.roomKeyLength).map { _ in chars.randomElement()! })
+        }
         RelayConfig.sharedDefaults.set(key, forKey: RelayConfig.roomKeyDefaultsKey)
         roomKey = key
         relayStatusText = "Room Key 已更新，等待新配对"
@@ -762,6 +779,14 @@ class SyncManager: ObservableObject {
     private func addRecord(_ content: String, direction: SyncRecord.Direction) {
         let record = SyncRecord(content: content, time: Date(), direction: direction)
         DispatchQueue.main.async {
+            if self.lastHistoryRecordContent == content,
+               let lastAt = self.lastHistoryRecordAt,
+               record.time.timeIntervalSince(lastAt) <= 10 {
+                clipLog("[SyncManager] skip duplicate history record")
+                return
+            }
+            self.lastHistoryRecordContent = content
+            self.lastHistoryRecordAt = record.time
             self.syncHistory.insert(record, at: 0)
             if self.syncHistory.count > 50 {
                 self.syncHistory = Array(self.syncHistory.prefix(50))

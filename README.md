@@ -149,12 +149,17 @@ cp ClipboardSync/harmony/config_example/relay_config.example.json \
   "relay": {
     "defaultHost": "your-server-ip-or-domain",
     "defaultPort": 8443,
-    "wsPath": "/ws"
+    "wsPath": "/ws",
+    "defaultRoomKey": "ABC123"
   }
 }
 ```
 
-> 注意：配置文件仅设置默认服务器地址。在 App 中修改后会自动持久化，下次启动优先使用已保存的地址。
+`defaultRoomKey` 是可选的 6 位大写字母/数字固定配对码。个人使用多台 Mac 时，建议在每台 Mac 的
+`~/.clipboardsync/relay_config.json` 中填入相同的 `defaultRoomKey`，手机端的鸿蒙配置文件也填入相同值。
+配置中的固定配对码优先级高于本机历史随机配对码，升级后会自动统一到该房间。
+
+> 注意：配置文件中的 `defaultHost`、`defaultRoomKey` 都是默认值；应用内修改服务器地址后会自动持久化。固定配对码模式下，Mac 的“重新生成”按钮会保持该固定码不变。
 
 ### 自建中继服务器
 

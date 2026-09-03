@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainView: View {
     @ObservedObject var syncManager: SyncManager
+    var onPopoverHoverChanged: ((Bool) -> Void)?
     @State private var isEditingHost: Bool = false
     @State private var editHostText: String = ""
     @State private var showQRCode: Bool = false
@@ -39,6 +40,9 @@ struct MainView: View {
             }
         }
         .frame(width: 340, height: 520)
+        .onHover { isInside in
+            onPopoverHoverChanged?(isInside)
+        }
 
         // 底部版本号
         HStack {

@@ -134,6 +134,7 @@ export class RelayConfig {
   private static _defaultHost: string = 'localhost'
   private static _defaultPort: number = 8443
   private static _wsPath: string = '/ws'
+  private static _defaultRoomKey: string = ''
   private static _configLoaded: boolean = false
 
   /**
@@ -155,6 +156,8 @@ export class RelayConfig {
         RelayConfig._defaultHost = (relay.defaultHost as string) || 'localhost'
         RelayConfig._defaultPort = (relay.defaultPort as number) || 8443
         RelayConfig._wsPath = (relay.wsPath as string) || '/ws'
+        const configuredRoomKey = (relay.defaultRoomKey as string) || ''
+        RelayConfig._defaultRoomKey = /^[A-Z0-9]{6}$/.test(configuredRoomKey) ? configuredRoomKey : ''
       }
       console.info('[RelayConfig] Config loaded: host=' + RelayConfig._defaultHost)
     } catch (_e) {
@@ -173,6 +176,11 @@ export class RelayConfig {
 
   static get WS_PATH(): string {
     return RelayConfig._wsPath
+  }
+
+  /** 可选的统一配对码，配置后所有设备进入同一个中继房间 */
+  static get DEFAULT_ROOM_KEY(): string {
+    return RelayConfig._defaultRoomKey
   }
 
   /**

@@ -90,6 +90,9 @@ export class SyncManager {
   private isRemoteUpdate: boolean = false
   private lastChangeCount: number = -1
   private lastSentTimestamp: number = 0
+  // 最近由远端写入的文本，用于过滤系统剪贴板异步回调造成的回传
+  private lastRemoteClipboardText: string = ''
+  private lastRemoteClipboardAt: number = 0
   private _clipboardDirty: boolean = false
   private _cachedClipboardText: string = ''
   private _clipboardReadInFlight: boolean = false   // 剪贴板读取/重试链进行中，防并发双发
@@ -565,8 +568,22 @@ export class SyncManager {
     }
 
     const savedKey: string = this.relayPrefs.getSync(RelayConfig.ROOM_KEY_STORAGE_KEY, '') as string
+    const configuredKey = RelayConfig.DEFAULT_ROOM_KEY
     console.info('[SyncManager] initRelay: savedKey=' + (savedKey.length > 0 ? savedKey : '(empty)'))
-    if (savedKey.length > 0) {
+    console.info('[SyncManager] initRelay: fixedKey=' + (configuredKey.length > 0 ? 'configured' : '(none)'))
+    if (configuredKey.length === RelayConfig.ROOM_KEY_LENGTH) {
+      if (savedKey !== configuredKey) {
+        console.info('[SyncManager] initRelay: applying configured fixed roomKey')
+        this.relayPrefs.putSync(RelayConfig.ROOM_KEY_STORAGE_KEY, configuredKey)
+        this.relayPrefs.flush()
+      }
+      this._roomKey = configuredKey
+      // 从配对码派生 AES 加密密钥
+      void this.crypto.deriveKeyFromRoomKey(configuredKey)
+      const url = RelayConfig.buildURL(this._relayServerHost)
+      console.info('[SyncManager] initRelay: auto-connecting to ' + url + ' with configured key')
+      this.wsClient.connect(url, configuredKey)
+    } else if (savedKey.length > 0) {
       this._roomKey = savedKey
       // 从配对码派生 AES 加密密钥
       void this.crypto.deriveKeyFromRoomKey(savedKey)
@@ -932,10 +949,17 @@ export class SyncManager {
       }
       const text = this.extractText(data)
       console.info('[SyncManager] readClipboard: text length=' + text.length)
-      // 与最后一次同步相同的内容也照常发送：changeCount 变化即为用户真实复制
-      // （典型场景：再次复制同一条验证码/文本，对端剪贴板需要被刷新）。
-      // 回环保护由 isRemoteUpdate + lastChangeCount 双重校验负责，与此判断无关
       if (text.length > 0) {
+        const now = Date.now()
+        const isRecentRemoteEcho = text === this.lastRemoteClipboardText &&
+          now - this.lastRemoteClipboardAt <= 10000
+        if (isRecentRemoteEcho) {
+          console.info('[SyncManager] ignore recent remote clipboard echo')
+          this._cachedClipboardText = text
+          this.finishClipboardReadChain()
+          this._clipboardDirty = false
+          return
+        }
         this._cachedClipboardText = text
         this.finishClipboardReadChain()
         this.sendClipboardText(text)
@@ -1332,6 +1356,8 @@ export class SyncManager {
       this.systemPasteboard.setDataSync(data)
       this.lastChangeCount = this.systemPasteboard.getChangeCount()
       this._cachedClipboardText = text
+      this.lastRemoteClipboardText = text
+      this.lastRemoteClipboardAt = Date.now()
       this._clipboardDirty = false
     } catch (_e) {
       // ignore

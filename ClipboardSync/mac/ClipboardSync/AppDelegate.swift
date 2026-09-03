@@ -19,6 +19,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var popover: NSPopover!
     let syncManager = SyncManager()
     private var statusObserver: AnyCancellable?
+    private var popoverAutoCloseTimer: Timer?
+    private var pointerEnteredReceivedPopover = false
+    private var pointerInsidePopover = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 单实例保护
@@ -38,7 +41,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(
-            rootView: MainView(syncManager: syncManager)
+            rootView: MainView(
+                syncManager: syncManager,
+                onPopoverHoverChanged: { [weak self] isInside in
+                    self?.handlePopoverHoverChanged(isInside)
+                }
+            )
         )
         self.popover = popover
 
@@ -59,7 +67,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 收到内容时自动弹出菜单
         syncManager.onContentReceived = { [weak self] in
-            self?.showPopover()
+            self?.showPopoverForReceivedContent()
         }
 
         NSApp.setActivationPolicy(.accessory)
@@ -88,9 +96,40 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// 打开菜单栏弹窗
     private func showPopover() {
+        popoverAutoCloseTimer?.invalidate()
+        popoverAutoCloseTimer = nil
         guard let button = statusItem?.button, !popover.isShown else { return }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    }
+
+    /// 收到远端内容时打开弹窗，并在用户未进入弹窗时自动收起。
+    private func showPopoverForReceivedContent() {
+        pointerEnteredReceivedPopover = pointerInsidePopover
+        showPopover()
+        schedulePopoverAutoClose()
+    }
+
+    private func schedulePopoverAutoClose() {
+        popoverAutoCloseTimer?.invalidate()
+        guard popover.isShown, !pointerEnteredReceivedPopover else { return }
+
+        popoverAutoCloseTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.popoverAutoCloseTimer = nil
+            guard self.popover.isShown, !self.pointerEnteredReceivedPopover else { return }
+            self.popover.performClose(nil)
+        }
+    }
+
+    private func handlePopoverHoverChanged(_ isInside: Bool) {
+        pointerInsidePopover = isInside
+        guard popover.isShown else { return }
+        if isInside {
+            pointerEnteredReceivedPopover = true
+            popoverAutoCloseTimer?.invalidate()
+            popoverAutoCloseTimer = nil
+        }
     }
 
     private func updateStatusIcon(for status: SyncManager.SyncStatus) {
@@ -114,6 +153,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func togglePopover() {
         if let button = statusItem.button {
             if popover.isShown {
+                popoverAutoCloseTimer?.invalidate()
+                popoverAutoCloseTimer = nil
                 popover.performClose(nil)
             } else {
                 NSApp.activate(ignoringOtherApps: true)
